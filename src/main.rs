@@ -1,4 +1,4 @@
-use eframe::egui::{self, CentralPanel, Context, Frame, Visuals};
+use eframe::egui::{self, CentralPanel, Context, Frame, ScrollArea, Visuals};
 use egui::Margin;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::collections::BTreeMap;
@@ -45,13 +45,108 @@ fn load_ignore_set() -> GlobSet {
     builder.build().unwrap()
 }
 
-/// Our app state stores the file tree plus the text box input.
+/// A file tree structure for grouping files by folder.
+#[derive(Default)]
+struct FileTree {
+    folders: BTreeMap<String, FileTree>,
+    files: Vec<usize>,
+}
+
+/// Recursively builds a file tree from the list of file items.
+fn build_file_tree(files: &Vec<FileItem>) -> FileTree {
+    let mut root = FileTree {
+        folders: BTreeMap::new(),
+        files: Vec::new(),
+    };
+
+    for (i, file) in files.iter().enumerate() {
+        // Normalize the path to use forward slashes.
+        let path = file.rel_path.replace('\\', "/");
+        let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut current = &mut root;
+        for (j, part) in parts.iter().enumerate() {
+            if j == parts.len() - 1 {
+                // Last part is the file name.
+                current.files.push(i);
+            } else {
+                current = current.folders.entry(part.to_string()).or_default();
+            }
+        }
+    }
+    root
+}
+
+/// Recursively sort the file tree so that files are in alphabetical order.
+fn sort_file_tree(tree: &mut FileTree, files: &Vec<FileItem>) {
+    tree.files.sort_by(|&a, &b| {
+        let name_a = files[a].rel_path.rsplit('/').next().unwrap_or("");
+        let name_b = files[b].rel_path.rsplit('/').next().unwrap_or("");
+        name_a.cmp(name_b)
+    });
+    for (_, subtree) in tree.folders.iter_mut() {
+        sort_file_tree(subtree, files);
+    }
+}
+
+/// Returns true if every file in this tree (including subfolders) is selected.
+fn get_folder_all_selected(tree: &FileTree, files: &Vec<FileItem>) -> bool {
+    for &i in &tree.files {
+        if !files[i].selected {
+            return false;
+        }
+    }
+    for (_, sub_tree) in &tree.folders {
+        if !get_folder_all_selected(sub_tree, files) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Recursively set the selection state for all files in this tree.
+fn set_folder_selection(tree: &FileTree, files: &mut Vec<FileItem>, value: bool) {
+    for &i in &tree.files {
+        files[i].selected = value;
+    }
+    for (_, sub_tree) in &tree.folders {
+        set_folder_selection(sub_tree, files, value);
+    }
+}
+
+/// Our app state stores the file tree plus the text input and other state.
 struct MyApp {
     files: Vec<FileItem>,
     extra_text: String,
     ignore_set: GlobSet,
     generated_prompt: String,
     token_count: usize,
+    /// Stores the currently selected folder.
+    current_folder: Option<PathBuf>,
+}
+
+impl MyApp {
+    /// Refresh the file list based on the current folder.
+    fn refresh_files(&mut self) {
+        if let Some(ref folder) = self.current_folder {
+            let file_paths = get_all_files(folder);
+            self.files.clear();
+            for path in file_paths {
+                let rel_path = match path.strip_prefix(folder) {
+                    Ok(rel) => rel.to_string_lossy().to_string(),
+                    Err(_) => path.to_string_lossy().to_string(),
+                };
+                if self.ignore_set.is_match(&rel_path) {
+                    continue;
+                }
+                self.files.push(FileItem {
+                    path,
+                    rel_path,
+                    selected: false,
+                    content: None,
+                });
+            }
+        }
+    }
 }
 
 impl Default for MyApp {
@@ -62,8 +157,10 @@ impl Default for MyApp {
             ignore_set: load_ignore_set(),
             generated_prompt: String::new(),
             token_count: 0,
+            current_folder: None,
         };
         if let Ok(cwd) = std::env::current_dir() {
+            app.current_folder = Some(cwd.clone());
             let file_paths = get_all_files(&cwd);
             for path in file_paths {
                 let rel_path = match path.strip_prefix(&cwd) {
@@ -121,56 +218,32 @@ fn compute_prompt(files: &[FileItem], extra_text: &str) -> String {
     prompt
 }
 
-/// A simple tree structure for grouping files by folder.
-#[derive(Default)]
-struct FileTree {
-    expanded: bool,
-    folders: BTreeMap<String, FileTree>,
-    files: Vec<usize>,
-}
+/// Recursively show the file tree in the UI using egui's CollapsingHeader.
+/// Here we render each folder in a horizontal layout:
+/// a "Select All" checkbox to the left and the CollapsingHeader (with the folder name)
+/// to the right. When the header is expanded, the folder's children are displayed (indented).
+fn show_file_tree(ui: &mut egui::Ui, tree: &FileTree, files: &mut Vec<FileItem>) {
+    for (folder_name, subtree) in &tree.folders {
+        // Use a custom layout with reduced spacing.
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+            let old_spacing = ui.spacing().item_spacing;
+            // Reduce horizontal spacing between elements.
+            ui.spacing_mut().item_spacing.x = 0.5;
 
-/// Build a file tree from the list of file items.
-fn build_file_tree(files: &Vec<FileItem>) -> FileTree {
-    let mut tree = FileTree::default();
-    for (i, file) in files.iter().enumerate() {
-        let path = file.rel_path.replace('\\', "/");
-        let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        let mut current = &mut tree;
-        for (j, part) in parts.iter().enumerate() {
-            if j == parts.len() - 1 {
-                current.files.push(i);
-            } else {
-                current = current.folders.entry(part.to_string()).or_default();
+            // "Select All" checkbox.
+            let mut folder_selected = get_folder_all_selected(subtree, files);
+            if ui.checkbox(&mut folder_selected, "").changed() {
+                set_folder_selection(subtree, files, folder_selected);
             }
-        }
-    }
-    tree
-}
-
-/// Recursively sort the file tree.
-fn sort_file_tree(tree: &mut FileTree, files: &Vec<FileItem>) {
-    tree.files.sort_by(|&a, &b| {
-        let name_a = files[a].rel_path.rsplit('/').next().unwrap_or("");
-        let name_b = files[b].rel_path.rsplit('/').next().unwrap_or("");
-        name_a.cmp(name_b)
-    });
-    for (_, subtree) in tree.folders.iter_mut() {
-        sort_file_tree(subtree, files);
-    }
-}
-
-/// Recursively show the file tree in the UI, with folders first.
-fn show_file_tree(ui: &mut egui::Ui, tree: &mut FileTree, files: &mut Vec<FileItem>) {
-    // First, show folders.
-    for (folder_name, subtree) in tree.folders.iter_mut() {
-        egui::CollapsingHeader::new(folder_name)
-            .default_open(subtree.expanded)
-            .show(ui, |ui| {
-                subtree.expanded = true;
+            // CollapsingHeader for the folder.
+            ui.collapsing(folder_name, |ui| {
                 show_file_tree(ui, subtree, files);
             });
+            // Restore spacing.
+            ui.spacing_mut().item_spacing = old_spacing;
+        });
     }
-    // Then show files.
+    // Display files at this level.
     for &i in &tree.files {
         let file = &mut files[i];
         let file_name = file.rel_path.rsplit('/').next().unwrap_or(&file.rel_path);
@@ -180,7 +253,7 @@ fn show_file_tree(ui: &mut egui::Ui, tree: &mut FileTree, files: &mut Vec<FileIt
 
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
-        // Set partially transparent background.
+        // Set a partially transparent background.
         let mut visuals = ctx.style().visuals.clone();
         visuals.window_fill = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 128);
         ctx.set_visuals(visuals);
@@ -209,31 +282,25 @@ impl eframe::App for MyApp {
                 ui.columns(2, |cols| {
                     // Left column: File Tree View.
                     let left = &mut cols[0];
-                    if left.button("Select Folder").clicked() {
-                        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                            let file_paths = get_all_files(&folder);
-                            self.files.clear();
-                            for path in file_paths {
-                                let rel_path = match path.strip_prefix(&folder) {
-                                    Ok(rel) => rel.to_string_lossy().to_string(),
-                                    Err(_) => path.to_string_lossy().to_string(),
-                                };
-                                if self.ignore_set.is_match(&rel_path) {
-                                    continue;
-                                }
-                                self.files.push(FileItem {
-                                    path,
-                                    rel_path,
-                                    selected: false,
-                                    content: None,
-                                });
+
+                    left.horizontal(|ui| {
+                        if ui.button("Select Folder").clicked() {
+                            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                                self.current_folder = Some(folder.clone());
+                                self.refresh_files();
                             }
                         }
-                    }
+                        if self.current_folder.is_some() {
+                            if ui.small_button("Refresh").clicked() {
+                                self.refresh_files();
+                            }
+                        }
+                    });
+
                     left.separator();
                     let mut tree = build_file_tree(&self.files);
                     sort_file_tree(&mut tree, &self.files);
-                    show_file_tree(left, &mut tree, &mut self.files);
+                    show_file_tree(left, &tree, &mut self.files);
 
                     // Right column: Prompt Text and Generate & Copy.
                     let right = &mut cols[1];
@@ -242,8 +309,9 @@ impl eframe::App for MyApp {
                     right.text_edit_multiline(&mut self.extra_text);
                     right.separator();
                     right.label(format!(
-                        "Estimated token count (approx.): {}",
-                        self.token_count
+                        "Estimated token count (approx.): {} / 200,000 {:.2}%",
+                        self.token_count,
+                        (self.token_count as f32 / 200000.0) * 100.0
                     ));
                     right.separator();
                     if right.button("Generate & Copy Prompt").clicked() {
@@ -256,7 +324,14 @@ impl eframe::App for MyApp {
                     if !self.generated_prompt.is_empty() {
                         right.separator();
                         right.label("Generated Prompt Preview:");
-                        right.text_edit_multiline(&mut self.generated_prompt);
+                        ScrollArea::vertical().max_height(200.0).show(right, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.generated_prompt)
+                                    .desired_rows(10)
+                                    .lock_focus(true)
+                                    .desired_width(f32::INFINITY),
+                            );
+                        });
                     }
                 });
             });
