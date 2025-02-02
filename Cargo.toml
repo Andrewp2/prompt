@@ -1,0 +1,11 @@
+[package]
+name = "prompt"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+eframe = "0.22" # or the latest version
+egui = "0.22"
+rfd = "0.10"
+globset = "0.4"
