@@ -5,6 +5,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Maximum number of files to load.
+const MAX_FILES: usize = 10_000;
+
 /// Represents a file with its full path, selection state, and optionally its content.
 struct FileItem {
     /// The absolute path to the file.
@@ -27,6 +30,7 @@ fn load_ignore_set() -> GlobSet {
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
+            // If the pattern doesn't include a path separator, wrap it so that it matches anywhere.
             let pattern = if !trimmed.contains('/') {
                 format!("**/{}**", trimmed)
             } else {
@@ -37,6 +41,7 @@ fn load_ignore_set() -> GlobSet {
             }
         }
     } else {
+        // Fallback defaults.
         builder.add(Glob::new("**/target/**").unwrap());
         builder.add(Glob::new("**/.git/**").unwrap());
         builder.add(Glob::new("**/node_modules/**").unwrap());
@@ -128,13 +133,15 @@ impl MyApp {
     /// Refresh the file list based on the current folder.
     fn refresh_files(&mut self) {
         if let Some(ref folder) = self.current_folder {
-            let file_paths = get_all_files(folder);
+            // Get files while applying the ignore rules.
+            let file_paths = get_all_files_limited(folder, MAX_FILES, &self.ignore_set);
             self.files.clear();
             for path in file_paths {
                 let rel_path = match path.strip_prefix(folder) {
                     Ok(rel) => rel.to_string_lossy().to_string(),
                     Err(_) => path.to_string_lossy().to_string(),
                 };
+                // (Extra filtering here is optional, since get_all_files_limited already applied the rules.)
                 if self.ignore_set.is_match(&rel_path) {
                     continue;
                 }
@@ -161,7 +168,7 @@ impl Default for MyApp {
         };
         if let Ok(cwd) = std::env::current_dir() {
             app.current_folder = Some(cwd.clone());
-            let file_paths = get_all_files(&cwd);
+            let file_paths = get_all_files_limited(&cwd, MAX_FILES, &app.ignore_set);
             for path in file_paths {
                 let rel_path = match path.strip_prefix(&cwd) {
                     Ok(rel) => rel.to_string_lossy().to_string(),
@@ -182,19 +189,60 @@ impl Default for MyApp {
     }
 }
 
-/// Recursively collects all files (not directories) under `dir`.
-fn get_all_files(dir: &Path) -> Vec<PathBuf> {
+/// Walks the directory tree starting at `base`, applying ignore rules.
+/// It stops collecting files once the specified limit is reached. If more files exist,
+/// a warning dialog is shown.
+fn get_all_files_limited(base: &Path, limit: usize, ignore_set: &GlobSet) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                files.push(path);
-            } else if path.is_dir() {
-                files.extend(get_all_files(&path));
+    let mut dirs = vec![base.to_path_buf()];
+
+    while let Some(current_dir) = dirs.pop() {
+        // Compute the relative path for the current directory.
+        let rel_dir = current_dir.strip_prefix(base).unwrap_or(&current_dir);
+        if ignore_set.is_match(rel_dir.to_string_lossy().as_ref()) {
+            continue;
+        }
+
+        if let Ok(entries) = fs::read_dir(&current_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let rel_path = match path.strip_prefix(base) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                let rel_path_str = rel_path.to_string_lossy();
+                if path.is_file() {
+                    if ignore_set.is_match(rel_path_str.as_ref()) {
+                        continue;
+                    }
+                    files.push(path);
+                    if files.len() >= limit {
+                        break;
+                    }
+                } else if path.is_dir() {
+                    if ignore_set.is_match(rel_path_str.as_ref()) {
+                        continue;
+                    }
+                    dirs.push(path);
+                }
             }
         }
+        if files.len() >= limit {
+            break;
+        }
     }
+
+    if files.len() >= limit {
+        rfd::MessageDialog::new()
+            .set_title("Warning")
+            .set_description(&format!(
+                "More than {} files detected. Only the first {} files will be loaded.",
+                limit, limit
+            ))
+            .set_level(rfd::MessageLevel::Warning)
+            .show();
+    }
+    files.truncate(limit);
     files
 }
 
@@ -219,15 +267,10 @@ fn compute_prompt(files: &[FileItem], extra_text: &str) -> String {
 }
 
 /// Recursively show the file tree in the UI using egui's CollapsingHeader.
-/// Here we render each folder in a horizontal layout:
-/// a "Select All" checkbox to the left and the CollapsingHeader (with the folder name)
-/// to the right. When the header is expanded, the folder's children are displayed (indented).
 fn show_file_tree(ui: &mut egui::Ui, tree: &FileTree, files: &mut Vec<FileItem>) {
     for (folder_name, subtree) in &tree.folders {
-        // Use a custom layout with reduced spacing.
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
             let old_spacing = ui.spacing().item_spacing;
-            // Reduce horizontal spacing between elements.
             ui.spacing_mut().item_spacing.x = 0.5;
 
             // "Select All" checkbox.
@@ -239,7 +282,6 @@ fn show_file_tree(ui: &mut egui::Ui, tree: &FileTree, files: &mut Vec<FileItem>)
             ui.collapsing(folder_name, |ui| {
                 show_file_tree(ui, subtree, files);
             });
-            // Restore spacing.
             ui.spacing_mut().item_spacing = old_spacing;
         });
     }
