@@ -300,12 +300,15 @@ impl eframe::App for MyApp {
         visuals.window_fill = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 128);
         ctx.set_visuals(visuals);
 
-        // Update cached content for selected files.
+        // Update cached content for selected files if not loaded
+        // (This part is kept as-is to load initially, but the button below forces a reload)
         for file_item in &mut self.files {
             if file_item.selected && file_item.content.is_none() {
                 file_item.content = fs::read_to_string(&file_item.path).ok();
             }
         }
+
+        // Compute a preview prompt based on current file content (may be outdated)
         let preview_prompt = compute_prompt(&self.files, &self.extra_text);
         self.token_count = (preview_prompt.chars().count() as f32 / 4.0).ceil() as usize;
 
@@ -321,60 +324,70 @@ impl eframe::App for MyApp {
             .show(ctx, |ui| {
                 ui.heading("Prompt Generator");
 
-                ui.columns(2, |cols| {
-                    // Left column: File Tree View.
-                    let left = &mut cols[0];
-
-                    left.horizontal(|ui| {
-                        if ui.button("Select Folder").clicked() {
-                            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                                self.current_folder = Some(folder.clone());
-                                self.refresh_files();
+                let available_width = ui.available_width();
+                ui.horizontal(|ui| {
+                    // Left panel: occupies 25% of available width.
+                    ui.vertical(|ui| {
+                        ui.set_width(available_width * 0.25);
+                        ui.horizontal(|ui| {
+                            if ui.button("Select Folder").clicked() {
+                                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                                    self.current_folder = Some(folder.clone());
+                                    self.refresh_files();
+                                }
                             }
+                            if self.current_folder.is_some() {
+                                if ui.small_button("Refresh").clicked() {
+                                    self.refresh_files();
+                                }
+                            }
+                        });
+                        ui.separator();
+                        let mut tree = build_file_tree(&self.files);
+                        sort_file_tree(&mut tree, &self.files);
+                        show_file_tree(ui, &tree, &mut self.files);
+                    });
+                    // Right panel: occupies 75% of available width.
+                    ui.vertical(|ui| {
+                        ui.set_width(available_width * 0.75);
+                        ui.heading("Prompt Text");
+                        ui.label("Enter additional prompt text:");
+                        ui.text_edit_multiline(&mut self.extra_text);
+                        ui.separator();
+                        ui.label(format!(
+                            "Estimated token count (approx.): {} / 200,000 {:.2}%",
+                            self.token_count,
+                            (self.token_count as f32 / 200000.0) * 100.0
+                        ));
+                        ui.separator();
+                        // --- Modified button callback starts here ---
+                        if ui.button("Generate & Copy Prompt").clicked() {
+                            // Force reload the content of each selected file
+                            for file_item in self.files.iter_mut().filter(|f| f.selected) {
+                                file_item.content = fs::read_to_string(&file_item.path).ok();
+                            }
+                            // Now compute the prompt using the updated file contents
+                            let prompt = compute_prompt(&self.files, &self.extra_text);
+                            self.generated_prompt = prompt.clone();
+                            ctx.output_mut(|o| {
+                                o.copied_text = prompt;
+                            });
+                            ui.label("Prompt generated and copied to clipboard!");
                         }
-                        if self.current_folder.is_some() {
-                            if ui.small_button("Refresh").clicked() {
-                                self.refresh_files();
-                            }
+                        // --- Modified button callback ends here ---
+                        if !self.generated_prompt.is_empty() {
+                            ui.separator();
+                            ui.label("Generated Prompt Preview:");
+                            ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut self.generated_prompt)
+                                        .desired_rows(10)
+                                        .lock_focus(true)
+                                        .desired_width(f32::INFINITY),
+                                );
+                            });
                         }
                     });
-
-                    left.separator();
-                    let mut tree = build_file_tree(&self.files);
-                    sort_file_tree(&mut tree, &self.files);
-                    show_file_tree(left, &tree, &mut self.files);
-
-                    // Right column: Prompt Text and Generate & Copy.
-                    let right = &mut cols[1];
-                    right.heading("Prompt Text");
-                    right.label("Enter additional prompt text:");
-                    right.text_edit_multiline(&mut self.extra_text);
-                    right.separator();
-                    right.label(format!(
-                        "Estimated token count (approx.): {} / 200,000 {:.2}%",
-                        self.token_count,
-                        (self.token_count as f32 / 200000.0) * 100.0
-                    ));
-                    right.separator();
-                    if right.button("Generate & Copy Prompt").clicked() {
-                        self.generated_prompt = preview_prompt.clone();
-                        ctx.output_mut(|o| {
-                            o.copied_text = self.generated_prompt.clone();
-                        });
-                        right.label("Prompt generated and copied to clipboard!");
-                    }
-                    if !self.generated_prompt.is_empty() {
-                        right.separator();
-                        right.label("Generated Prompt Preview:");
-                        ScrollArea::vertical().max_height(200.0).show(right, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut self.generated_prompt)
-                                    .desired_rows(10)
-                                    .lock_focus(true)
-                                    .desired_width(f32::INFINITY),
-                            );
-                        });
-                    }
                 });
             });
     }
