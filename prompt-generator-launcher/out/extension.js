@@ -15,7 +15,8 @@ function activate(context) {
         // Launch the Prompt Generator with the folder as argument.
         const child = (0, child_process_1.spawn)(promptBinary, [folderPath], {
             detached: true,
-            stdio: 'ignore'
+            stdio: 'ignore',
+            cwd: folderPath
         });
         child.unref();
     });

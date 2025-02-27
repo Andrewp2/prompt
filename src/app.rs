@@ -3,7 +3,7 @@ use egui::Margin;
 use std::env;
 use std::path::{Path, PathBuf};
 
-use crate::file_item::{get_all_files_limited, load_ignore_set, FileItem, MAX_FILES};
+use crate::file_item::{get_all_files_limited, load_ignore_set_from, FileItem, MAX_FILES};
 use crate::file_tree::{
     build_file_tree, generate_file_tree_string, show_file_tree, sort_file_tree,
 };
@@ -22,7 +22,10 @@ impl MyApp {
     /// Refresh the file list based on the current folder.
     pub fn refresh_files(&mut self) {
         if let Some(ref folder) = self.current_folder {
-            let file_paths = get_all_files_limited(folder, MAX_FILES, &self.ignore_set);
+            // Reload the ignore set from the selected folder.
+            self.ignore_set = crate::file_item::load_ignore_set_from(folder);
+            let file_paths =
+                crate::file_item::get_all_files_limited(folder, MAX_FILES, &self.ignore_set);
             self.files.clear();
             for path in file_paths {
                 let rel_path = match path.strip_prefix(folder) {
@@ -32,7 +35,7 @@ impl MyApp {
                 if self.ignore_set.is_match(&rel_path) {
                     continue;
                 }
-                self.files.push(FileItem {
+                self.files.push(crate::file_item::FileItem {
                     path,
                     rel_path,
                     selected: false,
@@ -45,33 +48,36 @@ impl MyApp {
 
 impl Default for MyApp {
     fn default() -> Self {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let ignore_set = crate::file_item::load_ignore_set_from(&cwd);
         let mut app = Self {
             files: Vec::new(),
             extra_text: String::new(),
-            ignore_set: load_ignore_set(),
+            ignore_set,
             generated_prompt: String::new(),
             token_count: 0,
-            current_folder: None,
+            current_folder: Some(cwd.clone()),
             include_file_tree: true, // Checked by default.
         };
-        if let Ok(cwd) = std::env::current_dir() {
-            app.current_folder = Some(cwd.clone());
-            let file_paths = get_all_files_limited(&cwd, MAX_FILES, &app.ignore_set);
-            for path in file_paths {
-                let rel_path = match path.strip_prefix(&cwd) {
-                    Ok(rel) => rel.to_string_lossy().to_string(),
-                    Err(_) => path.to_string_lossy().to_string(),
-                };
-                if app.ignore_set.is_match(&rel_path) {
-                    continue;
-                }
-                app.files.push(FileItem {
-                    path,
-                    rel_path,
-                    selected: false,
-                    content: None,
-                });
+        let file_paths = crate::file_item::get_all_files_limited(
+            &cwd,
+            crate::file_item::MAX_FILES,
+            &app.ignore_set,
+        );
+        for path in file_paths {
+            let rel_path = match path.strip_prefix(&cwd) {
+                Ok(rel) => rel.to_string_lossy().to_string(),
+                Err(_) => path.to_string_lossy().to_string(),
+            };
+            if app.ignore_set.is_match(&rel_path) {
+                continue;
             }
+            app.files.push(crate::file_item::FileItem {
+                path,
+                rel_path,
+                selected: false,
+                content: None,
+            });
         }
         app
     }

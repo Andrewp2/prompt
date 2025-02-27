@@ -14,7 +14,8 @@ export function activate(context: vscode.ExtensionContext) {
     // Launch the Prompt Generator with the folder as argument.
     const child = spawn(promptBinary, [folderPath], {
       detached: true,
-      stdio: 'ignore'
+      stdio: 'ignore',
+      cwd: folderPath
     });
     child.unref();
   });

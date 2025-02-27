@@ -1,5 +1,4 @@
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -15,10 +14,29 @@ pub struct FileItem {
     pub content: Option<String>,
 }
 
-/// Loads ignore patterns from a file named ".promptignore".
-pub fn load_ignore_set() -> GlobSet {
+/// Searches upward from `start` for a .promptignore file.
+pub fn find_ignore_file(start: &Path) -> Option<PathBuf> {
+    let mut current = start;
+    loop {
+        let candidate = current.join(".promptignore");
+        if candidate.exists() {
+            eprintln!("Found .promptignore at {:?}", candidate);
+            return Some(candidate);
+        }
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+    None
+}
+
+/// Loads ignore patterns using the .promptignore file found by searching upward.
+pub fn load_ignore_set_from(base: &Path) -> GlobSet {
+    let ignore_path = find_ignore_file(base).unwrap_or_else(|| base.join(".promptignore"));
+    eprintln!("Loading ignore patterns from {:?}", ignore_path);
     let mut builder = GlobSetBuilder::new();
-    if let Ok(contents) = fs::read_to_string(".promptignore") {
+    if let Ok(contents) = fs::read_to_string(ignore_path) {
         for line in contents.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -34,12 +52,15 @@ pub fn load_ignore_set() -> GlobSet {
             }
         }
     } else {
+        // Fallback defaults.
         builder.add(Glob::new("**/target/**").unwrap());
         builder.add(Glob::new("**/.git/**").unwrap());
         builder.add(Glob::new("**/node_modules/**").unwrap());
         builder.add(Glob::new("**/*.tmp").unwrap());
     }
-    builder.build().unwrap()
+    let gs = builder.build().unwrap();
+    eprintln!("Loaded {} ignore patterns.", gs.len());
+    gs
 }
 
 /// Walks the directory tree starting at `base`, applying ignore rules.
