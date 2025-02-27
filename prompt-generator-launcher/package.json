@@ -1,0 +1,43 @@
+{
+  "name": "prompt-generator-launcher",
+  "displayName": "Prompt Generator Launcher",
+  "description": "Launches Prompt Generator from a folder context menu in VSCode.",
+  "version": "0.1.0",
+  "publisher": "Andrew Peterson",
+  "engines": {
+    "vscode": "^1.97.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:promptGenerator.open"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "promptGenerator.open",
+        "title": "Open in Prompt Generator"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "promptGenerator.open",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.2",
+    "@types/vscode": "^1.97.0",
+    "typescript": "^5.7.3"
+  }
+}

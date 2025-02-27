@@ -1,7 +1,8 @@
-use eframe::egui::{self, CentralPanel, Context, Frame, ScrollArea, Visuals};
+use eframe::egui::{self, CentralPanel, Context, Frame, ScrollArea};
 use egui::Margin;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::collections::BTreeMap;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,19 +10,15 @@ use std::path::{Path, PathBuf};
 const MAX_FILES: usize = 10_000;
 
 /// Represents a file with its full path, selection state, and optionally its content.
+#[derive(Clone)]
 struct FileItem {
-    /// The absolute path to the file.
     path: PathBuf,
-    /// The relative path (to the chosen folder) used for display.
     rel_path: String,
     selected: bool,
-    /// Cached content; once loaded, this is reused.
     content: Option<String>,
 }
 
 /// Loads ignore patterns from a file named ".promptignore".
-/// Lines starting with '#' or blank lines are ignored.
-/// Returns a GlobSet built from the patterns, or falls back to default patterns.
 fn load_ignore_set() -> GlobSet {
     let mut builder = GlobSetBuilder::new();
     if let Ok(contents) = fs::read_to_string(".promptignore") {
@@ -30,7 +27,6 @@ fn load_ignore_set() -> GlobSet {
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            // If the pattern doesn't include a path separator, wrap it so that it matches anywhere.
             let pattern = if !trimmed.contains('/') {
                 format!("**/{}**", trimmed)
             } else {
@@ -41,7 +37,6 @@ fn load_ignore_set() -> GlobSet {
             }
         }
     } else {
-        // Fallback defaults.
         builder.add(Glob::new("**/target/**").unwrap());
         builder.add(Glob::new("**/.git/**").unwrap());
         builder.add(Glob::new("**/node_modules/**").unwrap());
@@ -58,20 +53,17 @@ struct FileTree {
 }
 
 /// Recursively builds a file tree from the list of file items.
-fn build_file_tree(files: &Vec<FileItem>) -> FileTree {
+fn build_file_tree(files: &[FileItem]) -> FileTree {
     let mut root = FileTree {
         folders: BTreeMap::new(),
         files: Vec::new(),
     };
-
     for (i, file) in files.iter().enumerate() {
-        // Normalize the path to use forward slashes.
         let path = file.rel_path.replace('\\', "/");
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         let mut current = &mut root;
         for (j, part) in parts.iter().enumerate() {
             if j == parts.len() - 1 {
-                // Last part is the file name.
                 current.files.push(i);
             } else {
                 current = current.folders.entry(part.to_string()).or_default();
@@ -82,7 +74,7 @@ fn build_file_tree(files: &Vec<FileItem>) -> FileTree {
 }
 
 /// Recursively sort the file tree so that files are in alphabetical order.
-fn sort_file_tree(tree: &mut FileTree, files: &Vec<FileItem>) {
+fn sort_file_tree(tree: &mut FileTree, files: &[FileItem]) {
     tree.files.sort_by(|&a, &b| {
         let name_a = files[a].rel_path.rsplit('/').next().unwrap_or("");
         let name_b = files[b].rel_path.rsplit('/').next().unwrap_or("");
@@ -94,7 +86,7 @@ fn sort_file_tree(tree: &mut FileTree, files: &Vec<FileItem>) {
 }
 
 /// Returns true if every file in this tree (including subfolders) is selected.
-fn get_folder_all_selected(tree: &FileTree, files: &Vec<FileItem>) -> bool {
+fn get_folder_all_selected(tree: &FileTree, files: &[FileItem]) -> bool {
     for &i in &tree.files {
         if !files[i].selected {
             return false;
@@ -109,7 +101,7 @@ fn get_folder_all_selected(tree: &FileTree, files: &Vec<FileItem>) -> bool {
 }
 
 /// Recursively set the selection state for all files in this tree.
-fn set_folder_selection(tree: &FileTree, files: &mut Vec<FileItem>, value: bool) {
+fn set_folder_selection(tree: &FileTree, files: &mut [FileItem], value: bool) {
     for &i in &tree.files {
         files[i].selected = value;
     }
@@ -118,22 +110,21 @@ fn set_folder_selection(tree: &FileTree, files: &mut Vec<FileItem>, value: bool)
     }
 }
 
-/// Our app state stores the file tree plus the text input and other state.
+/// Our app state stores the file tree, text input, and other state.
 struct MyApp {
     files: Vec<FileItem>,
     extra_text: String,
     ignore_set: GlobSet,
     generated_prompt: String,
     token_count: usize,
-    /// Stores the currently selected folder.
     current_folder: Option<PathBuf>,
+    include_file_tree: bool, // Toggle inclusion of file tree.
 }
 
 impl MyApp {
     /// Refresh the file list based on the current folder.
     fn refresh_files(&mut self) {
         if let Some(ref folder) = self.current_folder {
-            // Get files while applying the ignore rules.
             let file_paths = get_all_files_limited(folder, MAX_FILES, &self.ignore_set);
             self.files.clear();
             for path in file_paths {
@@ -141,7 +132,6 @@ impl MyApp {
                     Ok(rel) => rel.to_string_lossy().to_string(),
                     Err(_) => path.to_string_lossy().to_string(),
                 };
-                // (Extra filtering here is optional, since get_all_files_limited already applied the rules.)
                 if self.ignore_set.is_match(&rel_path) {
                     continue;
                 }
@@ -165,6 +155,7 @@ impl Default for MyApp {
             generated_prompt: String::new(),
             token_count: 0,
             current_folder: None,
+            include_file_tree: true, // Now checked by default.
         };
         if let Ok(cwd) = std::env::current_dir() {
             app.current_folder = Some(cwd.clone());
@@ -190,19 +181,14 @@ impl Default for MyApp {
 }
 
 /// Walks the directory tree starting at `base`, applying ignore rules.
-/// It stops collecting files once the specified limit is reached. If more files exist,
-/// a warning dialog is shown.
 fn get_all_files_limited(base: &Path, limit: usize, ignore_set: &GlobSet) -> Vec<PathBuf> {
     let mut files = Vec::new();
     let mut dirs = vec![base.to_path_buf()];
-
     while let Some(current_dir) = dirs.pop() {
-        // Compute the relative path for the current directory.
         let rel_dir = current_dir.strip_prefix(base).unwrap_or(&current_dir);
         if ignore_set.is_match(rel_dir.to_string_lossy().as_ref()) {
             continue;
         }
-
         if let Ok(entries) = fs::read_dir(&current_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -231,7 +217,6 @@ fn get_all_files_limited(base: &Path, limit: usize, ignore_set: &GlobSet) -> Vec
             break;
         }
     }
-
     if files.len() >= limit {
         rfd::MessageDialog::new()
             .set_title("Warning")
@@ -267,25 +252,21 @@ fn compute_prompt(files: &[FileItem], extra_text: &str) -> String {
 }
 
 /// Recursively show the file tree in the UI using egui's CollapsingHeader.
-fn show_file_tree(ui: &mut egui::Ui, tree: &FileTree, files: &mut Vec<FileItem>) {
+fn show_file_tree(ui: &mut egui::Ui, tree: &FileTree, files: &mut [FileItem]) {
     for (folder_name, subtree) in &tree.folders {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
             let old_spacing = ui.spacing().item_spacing;
             ui.spacing_mut().item_spacing.x = 0.5;
-
-            // "Select All" checkbox.
             let mut folder_selected = get_folder_all_selected(subtree, files);
             if ui.checkbox(&mut folder_selected, "").changed() {
                 set_folder_selection(subtree, files, folder_selected);
             }
-            // CollapsingHeader for the folder.
             ui.collapsing(folder_name, |ui| {
                 show_file_tree(ui, subtree, files);
             });
             ui.spacing_mut().item_spacing = old_spacing;
         });
     }
-    // Display files at this level.
     for &i in &tree.files {
         let file = &mut files[i];
         let file_name = file.rel_path.rsplit('/').next().unwrap_or(&file.rel_path);
@@ -293,24 +274,87 @@ fn show_file_tree(ui: &mut egui::Ui, tree: &FileTree, files: &mut Vec<FileItem>)
     }
 }
 
+/// Generates a textual file tree from the loaded files.
+fn generate_file_tree_string(files: &[FileItem], base: &Path) -> String {
+    let mut tree = build_file_tree(files);
+    sort_file_tree(&mut tree, files);
+    let base_name = base
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("root"))
+        .to_string_lossy()
+        .to_string();
+    let mut output = format!("{}/\n", base_name);
+    output.push_str(&generate_tree_string(&tree, files, "".to_string()));
+    output
+}
+
+/// Recursively converts a FileTree into a tree-formatted string.
+/// Folders are now listed before files.
+fn generate_tree_string(tree: &FileTree, files: &[FileItem], prefix: String) -> String {
+    let mut output = String::new();
+    let mut entries: Vec<(String, bool, Option<&FileTree>)> = Vec::new();
+    for (folder, sub_tree) in &tree.folders {
+        entries.push((folder.clone(), true, Some(sub_tree)));
+    }
+    for &file_index in &tree.files {
+        let file_name = files[file_index]
+            .rel_path
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string();
+        entries.push((file_name, false, None));
+    }
+    use std::cmp::Ordering;
+    // Sort so that folders come before files, then alphabetically.
+    entries.sort_by(|a, b| match (a.1, b.1) {
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        _ => a.0.cmp(&b.0),
+    });
+    let total = entries.len();
+    for (i, entry) in entries.into_iter().enumerate() {
+        let is_last = i == total - 1;
+        let connector = if is_last { "└─ " } else { "├─ " };
+        output.push_str(&format!("{}{}{}\n", prefix, connector, entry.0));
+        if entry.1 {
+            if let Some(sub_tree) = entry.2 {
+                let new_prefix = if is_last {
+                    format!("{}    ", prefix)
+                } else {
+                    format!("{}│   ", prefix)
+                };
+                output.push_str(&generate_tree_string(sub_tree, files, new_prefix));
+            }
+        }
+    }
+    output
+}
+
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
-        // Set a partially transparent background.
         let mut visuals = ctx.style().visuals.clone();
         visuals.window_fill = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 128);
         ctx.set_visuals(visuals);
 
-        // Update cached content for selected files if not loaded
-        // (This part is kept as-is to load initially, but the button below forces a reload)
         for file_item in &mut self.files {
             if file_item.selected && file_item.content.is_none() {
                 file_item.content = fs::read_to_string(&file_item.path).ok();
             }
         }
 
-        // Compute a preview prompt based on current file content (may be outdated)
-        let preview_prompt = compute_prompt(&self.files, &self.extra_text);
-        self.token_count = (preview_prompt.chars().count() as f32 / 4.0).ceil() as usize;
+        // Compute the base prompt from selected files and extra text.
+        let base_prompt = compute_prompt(&self.files, &self.extra_text);
+        // If the file tree is included, prepend its text.
+        let final_prompt = if self.include_file_tree {
+            let base = self.current_folder.as_deref().unwrap_or(Path::new("."));
+            let tree_text = generate_file_tree_string(&self.files, base);
+            format!("{}\n\n{}", tree_text, base_prompt)
+        } else {
+            base_prompt
+        };
+        // Compute token count (using an approximate 4 characters per token).
+        self.token_count = (final_prompt.chars().count() as f32 / 4.0).ceil() as usize;
 
         let frame = Frame::none().inner_margin(Margin {
             left: 5.0,
@@ -326,7 +370,7 @@ impl eframe::App for MyApp {
 
                 let available_width = ui.available_width();
                 ui.horizontal(|ui| {
-                    // Left panel: occupies 25% of available width.
+                    // Left panel: File selection.
                     ui.vertical(|ui| {
                         ui.set_width(available_width * 0.25);
                         ui.horizontal(|ui| {
@@ -347,45 +391,40 @@ impl eframe::App for MyApp {
                         sort_file_tree(&mut tree, &self.files);
                         show_file_tree(ui, &tree, &mut self.files);
                     });
-                    // Right panel: occupies 75% of available width.
+                    // Right panel: Prompt creation.
                     ui.vertical(|ui| {
                         ui.set_width(available_width * 0.75);
                         ui.heading("Prompt Text");
                         ui.label("Enter additional prompt text:");
-                        ui.text_edit_multiline(&mut self.extra_text);
+                        ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
+                            ui.text_edit_multiline(&mut self.extra_text);
+                        });
+                        ui.separator();
+                        ui.checkbox(&mut self.include_file_tree, "Include file tree in prompt");
                         ui.separator();
                         ui.label(format!(
-                            "Estimated token count (approx.): {} / 200,000 {:.2}%",
+                            "Token count: {} / 200,000 {:.2}%",
                             self.token_count,
                             (self.token_count as f32 / 200000.0) * 100.0
                         ));
                         ui.separator();
-                        // --- Modified button callback starts here ---
-                        if ui.button("Generate & Copy Prompt").clicked() {
-                            // Force reload the content of each selected file
+                        if ui.button("Copy Prompt").clicked() {
                             for file_item in self.files.iter_mut().filter(|f| f.selected) {
                                 file_item.content = fs::read_to_string(&file_item.path).ok();
                             }
-                            // Now compute the prompt using the updated file contents
                             let prompt = compute_prompt(&self.files, &self.extra_text);
-                            self.generated_prompt = prompt.clone();
+                            let final_prompt = if self.include_file_tree {
+                                let base = self.current_folder.as_deref().unwrap_or(Path::new("."));
+                                let tree_text = generate_file_tree_string(&self.files, base);
+                                format!("{}\n\n{}", tree_text, prompt)
+                            } else {
+                                prompt
+                            };
+                            self.generated_prompt = final_prompt.clone();
                             ctx.output_mut(|o| {
-                                o.copied_text = prompt;
+                                o.copied_text = final_prompt;
                             });
-                            ui.label("Prompt generated and copied to clipboard!");
-                        }
-                        // --- Modified button callback ends here ---
-                        if !self.generated_prompt.is_empty() {
-                            ui.separator();
-                            ui.label("Generated Prompt Preview:");
-                            ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut self.generated_prompt)
-                                        .desired_rows(10)
-                                        .lock_focus(true)
-                                        .desired_width(f32::INFINITY),
-                                );
-                            });
+                            ui.label("Prompt copied to clipboard!");
                         }
                     });
                 });
@@ -394,12 +433,22 @@ impl eframe::App for MyApp {
 }
 
 fn main() {
+    let mut app = MyApp::default();
+    if let Some(arg) = env::args().nth(1) {
+        let folder = PathBuf::from(arg);
+        if folder.is_dir() {
+            app.current_folder = Some(folder);
+            app.refresh_files();
+        } else {
+            eprintln!("Warning: Provided argument is not a valid directory.");
+        }
+    }
     let mut native_options = eframe::NativeOptions::default();
     native_options.initial_window_size = Some(egui::vec2(1000.0, 600.0));
-    native_options.transparent = true; // Enable transparency.
+    native_options.transparent = true;
     eframe::run_native(
         "Prompt Generator",
         native_options,
-        Box::new(|_cc| Box::new(MyApp::default())),
+        Box::new(|_cc| Box::new(app)),
     );
 }
