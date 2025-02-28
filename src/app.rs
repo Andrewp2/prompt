@@ -1,11 +1,10 @@
-use eframe::egui::{self, CentralPanel, Context, Frame, ScrollArea};
-use egui::Margin;
-use std::env;
-use std::path::{Path, PathBuf};
+use core::f32;
+use eframe::egui::{self};
+use std::{env, path::PathBuf, time::Instant};
 
-use crate::file_item::{get_all_files_limited, load_ignore_set_from, FileItem, MAX_FILES};
-use crate::file_tree::{
-    build_file_tree, generate_file_tree_string, show_file_tree, sort_file_tree,
+use crate::{
+    file_item::{FileItem, MAX_FILES},
+    file_tree::{build_file_tree, generate_file_tree_string, show_file_tree, sort_file_tree},
 };
 
 pub struct MyApp {
@@ -16,6 +15,7 @@ pub struct MyApp {
     pub token_count: usize,
     pub current_folder: Option<PathBuf>,
     pub include_file_tree: bool, // Toggle inclusion of file tree.
+    pub notification: Option<(String, Instant)>,
 }
 
 impl MyApp {
@@ -57,7 +57,8 @@ impl Default for MyApp {
             generated_prompt: String::new(),
             token_count: 0,
             current_folder: Some(cwd.clone()),
-            include_file_tree: true, // Checked by default.
+            include_file_tree: true,
+            notification: None,
         };
         let file_paths = crate::file_item::get_all_files_limited(
             &cwd,
@@ -104,105 +105,132 @@ fn compute_prompt(files: &[FileItem], extra_text: &str) -> String {
 }
 
 impl eframe::App for MyApp {
-    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
-        // Set a partially transparent background.
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Example: set a semi-transparent background if you want
         let mut visuals = ctx.style().visuals.clone();
         visuals.window_fill = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 128);
         ctx.set_visuals(visuals);
 
-        // Update file contents if selected.
+        // Update file contents if selected
         for file_item in &mut self.files {
             if file_item.selected && file_item.content.is_none() {
                 file_item.content = std::fs::read_to_string(&file_item.path).ok();
             }
         }
 
-        // Build the base prompt from selected files and extra text.
+        // Build final prompt text
         let base_prompt = compute_prompt(&self.files, &self.extra_text);
-        // If the file tree is enabled, prepend its string.
         let final_prompt = if self.include_file_tree {
-            let base = self.current_folder.as_deref().unwrap_or(Path::new("."));
+            let base = self
+                .current_folder
+                .as_deref()
+                .unwrap_or(std::path::Path::new("."));
             let tree_text = generate_file_tree_string(&self.files, base);
             format!("{}\n\n{}", tree_text, base_prompt)
         } else {
             base_prompt
         };
-        // Compute token count (approx. 4 characters per token).
         self.token_count = (final_prompt.chars().count() as f32 / 4.0).ceil() as usize;
 
-        let frame = Frame::none().inner_margin(Margin {
-            left: 5.0,
-            right: 5.0,
-            top: 0.0,
-            bottom: 0.0,
-        });
-
-        CentralPanel::default()
-            .frame(frame.fill(egui::Color32::from_rgba_unmultiplied(25, 25, 25, 220)))
+        // Left panel: File tree
+        egui::SidePanel::left("left_panel")
+            .resizable(true)
+            .default_width(300.0)
             .show(ctx, |ui| {
-                ui.heading("Prompt Generator");
-
-                let available_width = ui.available_width();
                 ui.horizontal(|ui| {
-                    // Left panel: File selection.
-                    ui.vertical(|ui| {
-                        ui.set_width(available_width * 0.25);
-                        ui.horizontal(|ui| {
-                            if ui.button("Select Folder").clicked() {
-                                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                                    self.current_folder = Some(folder.clone());
-                                    self.refresh_files();
-                                }
-                            }
-                            if self.current_folder.is_some() {
-                                if ui.small_button("Refresh").clicked() {
-                                    self.refresh_files();
-                                }
-                            }
-                        });
-                        ui.separator();
-                        let mut tree = build_file_tree(&self.files);
-                        sort_file_tree(&mut tree, &self.files);
-                        show_file_tree(ui, &tree, &mut self.files);
-                    });
-                    // Right panel: Prompt creation.
-                    ui.vertical(|ui| {
-                        ui.set_width(available_width * 0.75);
-                        ui.heading("Prompt Text");
-                        ui.label("Enter additional prompt text:");
-                        ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
-                            ui.text_edit_multiline(&mut self.extra_text);
-                        });
-                        ui.separator();
-                        ui.checkbox(&mut self.include_file_tree, "Include file tree in prompt");
-                        ui.separator();
-                        ui.label(format!(
-                            "Token count: {} / 200,000 {:.2}%",
-                            self.token_count,
-                            (self.token_count as f32 / 200000.0) * 100.0
-                        ));
-                        ui.separator();
-                        if ui.button("Copy Prompt").clicked() {
-                            for file_item in self.files.iter_mut().filter(|f| f.selected) {
-                                file_item.content = std::fs::read_to_string(&file_item.path).ok();
-                            }
-                            let prompt = compute_prompt(&self.files, &self.extra_text);
-                            let final_prompt = if self.include_file_tree {
-                                let base = self.current_folder.as_deref().unwrap_or(Path::new("."));
-                                let tree_text = generate_file_tree_string(&self.files, base);
-                                format!("{}\n\n{}", tree_text, prompt)
-                            } else {
-                                prompt
-                            };
-                            self.generated_prompt = final_prompt.clone();
-                            ctx.output_mut(|o| {
-                                o.copied_text = final_prompt;
-                            });
-                            ui.label("Prompt copied to clipboard!");
+                    if ui.button("Select Folder").clicked() {
+                        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                            self.current_folder = Some(folder.clone());
+                            self.refresh_files();
                         }
-                    });
+                    }
+                    if ui.button("Refresh").clicked() {
+                        self.refresh_files();
+                    }
+                });
+                ui.separator();
+
+                // Show the file tree
+                let mut tree = build_file_tree(&self.files);
+                sort_file_tree(&mut tree, &self.files);
+                show_file_tree(ui, &tree, &mut self.files);
+            });
+
+        egui::TopBottomPanel::bottom("bottom_panel")
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.set_height(30.0);
+                    ui.checkbox(&mut self.include_file_tree, "Include file tree in prompt");
+                    ui.separator();
+                    ui.label(format!(
+                        "Token count: {} / 200,000 ({:.2}%)",
+                        self.token_count,
+                        (self.token_count as f32 / 200000.0) * 100.0
+                    ));
+                    ui.separator();
+                    if ui.button("Copy Prompt").clicked() {
+                        for file_item in self.files.iter_mut().filter(|f| f.selected) {
+                            file_item.content = std::fs::read_to_string(&file_item.path).ok();
+                        }
+                        let prompt = compute_prompt(&self.files, &self.extra_text);
+                        let final_prompt = if self.include_file_tree {
+                            let base = self
+                                .current_folder
+                                .as_deref()
+                                .unwrap_or(std::path::Path::new("."));
+                            let tree_text = generate_file_tree_string(&self.files, base);
+                            format!("{}\n\n{}", tree_text, prompt)
+                        } else {
+                            prompt
+                        };
+                        self.generated_prompt = final_prompt.clone();
+                        ctx.copy_text(final_prompt);
+                        self.notification =
+                            Some(("Prompt copied to clipboard!".to_owned(), Instant::now()));
+                    }
+                    const NOTIFICATION_DURATION: f32 = 3.0; // seconds
+                    if let Some((message, start)) = &self.notification {
+                        let elapsed = start.elapsed().as_secs_f32();
+                        if elapsed < NOTIFICATION_DURATION {
+                            let alpha = 1.0 - (elapsed / NOTIFICATION_DURATION);
+                            let text = egui::RichText::new(message).color(
+                                egui::Color32::from_rgba_unmultiplied(
+                                    255,
+                                    255,
+                                    255,
+                                    (alpha * 255.0) as u8,
+                                ),
+                            );
+                            ui.label(text);
+                            // Request a repaint so that the fade-out animation updates.
+                            ctx.request_repaint();
+                        } else {
+                            // Clear the notification after the duration expires.
+                            self.notification = None;
+                        }
+                    }
                 });
             });
+
+        // Central panel: multiline text editor
+        egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .max_height(f32::INFINITY)
+                .max_width(f32::INFINITY)
+                .show(ui, |ui| {
+                    //ui.put(max_rect, widget)
+                    ui.add_sized(
+                        [ui.available_width(), ui.available_height()],
+                        egui::TextEdit::multiline(&mut self.extra_text)
+                            .lock_focus(true)
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(4)
+                            .frame(true),
+                    );
+                });
+        });
     }
 }
 
@@ -219,12 +247,15 @@ pub fn run() {
             eprintln!("Warning: Provided argument is not a valid directory.");
         }
     }
-    let mut native_options = eframe::NativeOptions::default();
-    native_options.initial_window_size = Some(egui::vec2(1000.0, 600.0));
-    native_options.transparent = true;
-    eframe::run_native(
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1920.0, 1080.0])
+            .with_transparent(true),
+        ..Default::default()
+    };
+    let _ = eframe::run_native(
         "Prompt Generator",
-        native_options,
-        Box::new(|_cc| Box::new(app)),
+        options,
+        Box::new(|_cc| Ok(Box::new(app))),
     );
 }

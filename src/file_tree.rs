@@ -41,21 +41,6 @@ pub fn sort_file_tree(tree: &mut FileTree, files: &[FileItem]) {
     }
 }
 
-/// Returns true if every file in this tree (including subfolders) is selected.
-pub fn get_folder_all_selected(tree: &FileTree, files: &[FileItem]) -> bool {
-    for &i in &tree.files {
-        if !files[i].selected {
-            return false;
-        }
-    }
-    for (_, sub_tree) in &tree.folders {
-        if !get_folder_all_selected(sub_tree, files) {
-            return false;
-        }
-    }
-    true
-}
-
 /// Recursively sets the selection state for all files in this tree.
 pub fn set_folder_selection(tree: &FileTree, files: &mut [FileItem], value: bool) {
     for &i in &tree.files {
@@ -66,14 +51,24 @@ pub fn set_folder_selection(tree: &FileTree, files: &mut [FileItem], value: bool
     }
 }
 
-/// Displays the file tree in the UI using egui's collapsing headers.
 pub fn show_file_tree(ui: &mut egui::Ui, tree: &FileTree, files: &mut [FileItem]) {
     for (folder_name, subtree) in &tree.folders {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
             let old_spacing = ui.spacing().item_spacing;
             ui.spacing_mut().item_spacing.x = 0.5;
-            let mut folder_selected = get_folder_all_selected(subtree, files);
-            if ui.checkbox(&mut folder_selected, "").changed() {
+
+            // Get counts and determine the state.
+            let (total, selected) = get_folder_selection_counts(subtree, files);
+            let is_indeterminate = selected > 0 && selected < total;
+            // The underlying boolean: true only if all files are selected.
+            let mut folder_selected = selected == total;
+
+            // Build the checkbox and set its indeterminate state.
+            let mut checkbox = egui::Checkbox::new(&mut folder_selected, "");
+            if is_indeterminate {
+                checkbox = checkbox.indeterminate(true);
+            }
+            if ui.add(checkbox).changed() {
                 set_folder_selection(subtree, files, folder_selected);
             }
             ui.collapsing(folder_name, |ui| {
@@ -144,4 +139,16 @@ pub fn generate_tree_string(tree: &FileTree, files: &[FileItem], prefix: String)
         }
     }
     output
+}
+
+/// Returns (total number of files, number of selected files) in the tree.
+pub fn get_folder_selection_counts(tree: &FileTree, files: &[FileItem]) -> (usize, usize) {
+    let mut total = tree.files.len();
+    let mut selected = tree.files.iter().filter(|&&i| files[i].selected).count();
+    for (_, sub_tree) in &tree.folders {
+        let (sub_total, sub_selected) = get_folder_selection_counts(sub_tree, files);
+        total += sub_total;
+        selected += sub_selected;
+    }
+    (total, selected)
 }
