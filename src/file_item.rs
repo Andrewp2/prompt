@@ -2,10 +2,8 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Maximum number of files to load.
 pub const MAX_FILES: usize = 10_000;
 
-/// Represents a file with its full path, relative path, selection state, and optional cached content.
 #[derive(Clone)]
 pub struct FileItem {
     pub path: PathBuf,
@@ -14,7 +12,6 @@ pub struct FileItem {
     pub content: Option<String>,
 }
 
-/// Searches upward from `start` for a .promptignore file.
 pub fn find_ignore_file(start: &Path) -> Option<PathBuf> {
     let mut current = start;
     loop {
@@ -31,7 +28,6 @@ pub fn find_ignore_file(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Loads ignore patterns using the .promptignore file found by searching upward.
 pub fn load_ignore_set_from(base: &Path) -> GlobSet {
     let ignore_path = find_ignore_file(base).unwrap_or_else(|| base.join(".promptignore"));
     eprintln!("Loading ignore patterns from {:?}", ignore_path);
@@ -52,7 +48,6 @@ pub fn load_ignore_set_from(base: &Path) -> GlobSet {
             }
         }
     } else {
-        // Fallback defaults.
         builder.add(Glob::new("**/target/**").unwrap());
         builder.add(Glob::new("**/.git/**").unwrap());
         builder.add(Glob::new("**/node_modules/**").unwrap());
@@ -63,7 +58,6 @@ pub fn load_ignore_set_from(base: &Path) -> GlobSet {
     gs
 }
 
-/// Walks the directory tree starting at `base`, applying ignore rules.
 pub fn get_all_files_limited(base: &Path, limit: usize, ignore_set: &GlobSet) -> Vec<PathBuf> {
     let mut files = Vec::new();
     let mut dirs = vec![base.to_path_buf()];

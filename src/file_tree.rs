@@ -1,14 +1,12 @@
 use crate::file_item::FileItem;
 use std::collections::BTreeMap;
 
-/// A file tree structure for grouping files by folder.
 #[derive(Default)]
 pub struct FileTree {
     pub folders: BTreeMap<String, FileTree>,
     pub files: Vec<usize>,
 }
 
-/// Recursively builds a file tree from the list of file items.
 pub fn build_file_tree(files: &[FileItem]) -> FileTree {
     let mut root = FileTree {
         folders: BTreeMap::new(),
@@ -29,7 +27,6 @@ pub fn build_file_tree(files: &[FileItem]) -> FileTree {
     root
 }
 
-/// Recursively sort the file tree so that files are in alphabetical order.
 pub fn sort_file_tree(tree: &mut FileTree, files: &[FileItem]) {
     tree.files.sort_by(|&a, &b| {
         let name_a = files[a].rel_path.rsplit('/').next().unwrap_or("");
@@ -41,7 +38,6 @@ pub fn sort_file_tree(tree: &mut FileTree, files: &[FileItem]) {
     }
 }
 
-/// Recursively sets the selection state for all files in this tree.
 pub fn set_folder_selection(tree: &FileTree, files: &mut [FileItem], value: bool) {
     for &i in &tree.files {
         files[i].selected = value;
@@ -56,14 +52,9 @@ pub fn show_file_tree(ui: &mut egui::Ui, tree: &FileTree, files: &mut [FileItem]
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
             let old_spacing = ui.spacing().item_spacing;
             ui.spacing_mut().item_spacing.x = 0.5;
-
-            // Get counts and determine the state.
             let (total, selected) = get_folder_selection_counts(subtree, files);
             let is_indeterminate = selected > 0 && selected < total;
-            // The underlying boolean: true only if all files are selected.
             let mut folder_selected = selected == total;
-
-            // Build the checkbox and set its indeterminate state.
             let mut checkbox = egui::Checkbox::new(&mut folder_selected, "");
             if is_indeterminate {
                 checkbox = checkbox.indeterminate(true);
@@ -84,7 +75,6 @@ pub fn show_file_tree(ui: &mut egui::Ui, tree: &FileTree, files: &mut [FileItem]
     }
 }
 
-/// Generates a textual file tree from the loaded files.
 pub fn generate_file_tree_string(files: &[FileItem], base: &std::path::Path) -> String {
     let mut tree = build_file_tree(files);
     sort_file_tree(&mut tree, files);
@@ -98,8 +88,6 @@ pub fn generate_file_tree_string(files: &[FileItem], base: &std::path::Path) -> 
     output
 }
 
-/// Recursively converts a FileTree into a tree-formatted string.
-/// Folders are listed before files.
 pub fn generate_tree_string(tree: &FileTree, files: &[FileItem], prefix: String) -> String {
     let mut output = String::new();
     let mut entries: Vec<(String, bool, Option<&FileTree>)> = Vec::new();
@@ -116,7 +104,6 @@ pub fn generate_tree_string(tree: &FileTree, files: &[FileItem], prefix: String)
         entries.push((file_name, false, None));
     }
     use std::cmp::Ordering;
-    // Sort so that folders come before files, then alphabetically.
     entries.sort_by(|a, b| match (a.1, b.1) {
         (true, false) => Ordering::Less,
         (false, true) => Ordering::Greater,
@@ -141,7 +128,6 @@ pub fn generate_tree_string(tree: &FileTree, files: &[FileItem], prefix: String)
     output
 }
 
-/// Returns (total number of files, number of selected files) in the tree.
 pub fn get_folder_selection_counts(tree: &FileTree, files: &[FileItem]) -> (usize, usize) {
     let mut total = tree.files.len();
     let mut selected = tree.files.iter().filter(|&&i| files[i].selected).count();
