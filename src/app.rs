@@ -12,7 +12,6 @@ use num_format::{Locale, ToFormattedString};
 use std::{
     env,
     path::PathBuf,
-    sync::mpsc,
     time::{Duration, Instant},
 };
 
@@ -280,9 +279,9 @@ impl MyApp {
                         );
                     });
                 if ui.button("Copy Output to Prompt").clicked() {
-                    self.extra_text.push_str("\n");
+                    self.extra_text.push('\n');
                     self.extra_text.push_str(&self.terminal.terminal_command);
-                    self.extra_text.push_str("\n");
+                    self.extra_text.push('\n');
                     self.extra_text.push_str(&self.terminal.terminal_output);
                 }
             });

@@ -38,7 +38,7 @@ pub fn run_command(
     do_timeout: bool,
     max_duration: Duration,
 ) -> String {
-    let mut child = Command::new(cmd)
+    let child = Command::new(cmd)
         .args(args)
         .current_dir(working_dir) // Set the working directory here.
         .stdout(Stdio::piped())
@@ -96,10 +96,10 @@ pub fn run_command(
 
         output
     } else {
-        let output = child
+        
+        child
             .wait_with_output()
-            .expect("Failed to wait on child process");
-        output
+            .expect("Failed to wait on child process")
     };
     get_head_and_tail(first_n, last_n, output)
 }

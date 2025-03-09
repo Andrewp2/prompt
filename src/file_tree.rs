@@ -42,7 +42,7 @@ pub fn set_folder_selection(tree: &FileTree, files: &mut [FileItem], value: bool
     for &i in &tree.files {
         files[i].selected = value;
     }
-    for (_, sub_tree) in &tree.folders {
+    for sub_tree in tree.folders.values() {
         set_folder_selection(sub_tree, files, value);
     }
 }
@@ -131,7 +131,7 @@ pub fn generate_tree_string(tree: &FileTree, files: &[FileItem], prefix: String)
 pub fn get_folder_selection_counts(tree: &FileTree, files: &[FileItem]) -> (usize, usize) {
     let mut total = tree.files.len();
     let mut selected = tree.files.iter().filter(|&&i| files[i].selected).count();
-    for (_, sub_tree) in &tree.folders {
+    for sub_tree in tree.folders.values() {
         let (sub_total, sub_selected) = get_folder_selection_counts(sub_tree, files);
         total += sub_total;
         selected += sub_selected;

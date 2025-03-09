@@ -24,7 +24,7 @@ pub fn compute_prompt(files: &[FileItem], extra_text: &str, remote_urls: &[Remot
     for remote in remote_urls.iter().filter(|r| r.include) {
         if let Some(ref content) = remote.content {
             prompt.push_str(&format!("```{}\n", remote.url));
-            prompt.push_str(&content);
+            prompt.push_str(content);
             prompt.push_str("\n```\n\n");
         }
     }
