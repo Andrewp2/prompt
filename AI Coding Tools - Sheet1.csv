@@ -1,0 +1,33 @@
+Name,IDE (native),Browser,Terminal,GUI,Agentic,Copy/Paste,MCP,Free Tier,OSS,Local-model,BYO API Key,Diff Mode,OS Support,Provider Support,Context Management,Link,Other
+Cursor,✅,❌,❌,✅,✅,❌,✅,✅,❌,Experimental,✅,✅,Win / macOS / Linux,All,"https://docs.cursor.com/context/codebase-indexing
+Automatic embedding with RAG",https://www.cursor.com/,
+Zed,✅,❌,❌,✅,Beta,❌,✅,✅,❌,✅,✅,✅,"macOS, Linux",All,"Unclear, definitely not manual",https://zed.dev/,Great performance
+Windsurf,✅,❌,❌,✅,✅,❌,✅,✅,❌,❌,❌,✅,Win / macOS / Linux,Propietary,"https://windsurf.com/context
+Advanced context engine",https://windsurf.com/,Soon to be bought by OpenAI?
+v0,❌,✅,❌,✅,❌,❌,❌,✅,❌,❌,❌,❌,Web,Vercel,Automatic,https://v0.dev/,"Focus on web and UI, Next.js and React"
+Lovable,❌,✅,❌,✅,✅,❌,❌,✅,❌,❌,❌,❌,Web,OpenAI + Supabase,Automatic,https://lovable.dev/,"React, Tailwind, Vite, connect to OpenAI backends.
+Nocode"
+Firebase Studio,❌,✅,❌,✅,✅,❌,❌,✅,❌,❌,❌,❌,Web,Google,Automatic,https://studio.firebase.google.com/,"Preview, large android/google focus"
+Github Copilot,plug-in,❌,❌,✅,✅,❌,✅,✅,❌,❌,❌,✅,Win / macOS / Linux,"OpenAI, Gemini, Claude","Automatic, image support",https://github.com/features/copilot,
+OpenAI Codex,❌,❌,✅,❌,✅,❌,❌,✅,✅,❌,✅,✅,Win(WSL) / macOS / Linux,OpenAI,"Automatic, uses commands",https://github.com/openai/codex,
+Claude Code,❌,❌,✅,❌,✅,❌,✅,❌,❌,❌,❌,✅,"macOS, Linux",Claude,"Manually add memories
+Automatic, auto-compact when 
+context > 95% capacity",https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview#install-and-authenticate,Research Preview
+Aider,❌,❌,✅,❌,Partial,✅,❌,✅,✅,✅,✅,✅,Win / macOS / Linux,All,"Manual, Map",https://aider.chat/,"Voice transcription
+https://github.com/hotovo/aider-desk works with aider
+has GUI, MCP support"
+Repo Prompt,❌,❌,❌,✅,❌,✅,✅,✅,❌,✅ (Ollama),✅,✅,macOS,All,"Manual, Map",https://repoprompt.com/,
+Bismuth,❌,❌,✅,❌,✅,❌,❌,✅,✅,❌,✅,✅,Win / macOS / Linux,OpenRouter,"Automatic, uses commands","https://bismuth.sh/
+https://github.com/BismuthCloud/daemonite
+","Has PR creation, code scanning, review
+Best for Go, Python, JS/TS
+Has a CLI which is open source and a paid product"
+Replit Agent,❌,✅,❌,✅,✅,❌,❌,✅,❌,❌,❌,✅,Web,"Replit, OpenAI backend",Automatic,https://replit.com/ai,
+Plandex,❌,❌,✅,❌,✅,❌,❌,✅,✅,✅,✅,✅,Win(WSL) / macOS / Linux,"OpenRouter, OpenAI-compatible","Automatic and Manual
+Map",https://plandex.ai/,
+OpenCode,❌,❌,✅,❌,?,?,?,✅,✅,✅,✅,✅,?,?,?,,Not released yet.
+Devin,❌,✅,❌,✅,✅,❌,❌,❌,❌,❌,❌,✅,Web,Proprietary,Automatic,https://devin.ai/,"More of a software engineering agent that runs off on 
+it's own rather than a tool that a software engineer uses.
+Fairly expensive, ""high-end"" for the enterprise"
+OpenHands,❌,❌,✅,✅,✅,❌,❌,✅,✅,✅,✅,✅,"Win(WSL) / macOS / Linux
+Need Docker Desktop",All,Automatic,https://docs.all-hands.dev/,Needs fairly powerful models to work well

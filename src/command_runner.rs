@@ -19,9 +19,9 @@ impl Default for Terminal {
         let (term_tx, term_rx) = mpsc::channel();
         Self {
             terminal_command: String::new(),
-            head_lines: 40,
-            tail_lines: 15,
-            timeout_secs: 5,
+            head_lines: 1000,
+            tail_lines: 1000,
+            timeout_secs: 25,
             terminal_output: String::new(),
             terminal_update_rx: term_rx,
             terminal_update_tx: term_tx,
@@ -96,7 +96,6 @@ pub fn run_command(
 
         output
     } else {
-        
         child
             .wait_with_output()
             .expect("Failed to wait on child process")

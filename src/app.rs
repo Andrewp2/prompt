@@ -9,8 +9,10 @@ use core::f32;
 use eframe::egui;
 use globset::GlobSet;
 use num_format::{Locale, ToFormattedString};
+use shell_words;
 use std::{
-    env,
+    collections::HashMap,
+    env, fs,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -32,9 +34,16 @@ pub struct MyApp {
 impl MyApp {
     pub fn refresh_files(&mut self) {
         if let Some(ref folder) = self.current_folder {
+            let previous_selection: HashMap<_, _> = self
+                .files
+                .iter()
+                .map(|f| (f.path.clone(), f.selected))
+                .collect();
+
             self.ignore_set = crate::file_item::load_ignore_set_from(folder);
             let file_paths =
                 crate::file_item::get_all_files_limited(folder, MAX_FILES, &self.ignore_set);
+
             self.files.clear();
             for path in file_paths {
                 let rel_path = match path.strip_prefix(folder) {
@@ -44,11 +53,16 @@ impl MyApp {
                 if self.ignore_set.is_match(&rel_path) {
                     continue;
                 }
+                let text = fs::read_to_string(&path).unwrap_or_default();
+                let tok = ((text.chars().count() as f32) / 4.0).ceil() as usize;
+
+                let selected = previous_selection.get(&path).cloned().unwrap_or(false);
                 self.files.push(FileItem {
                     path,
                     rel_path,
-                    selected: false,
+                    selected,
                     content: None,
+                    token_count: tok,
                 });
             }
         }
@@ -115,6 +129,7 @@ impl MyApp {
     }
 
     fn file_panel(&mut self, ctx: &egui::Context) {
+        const BOTTOM_MARGIN: f32 = 8.0;
         egui::SidePanel::left("left_panel")
             .resizable(true)
             .default_width(300.0)
@@ -131,13 +146,18 @@ impl MyApp {
                     }
                 });
                 ui.separator();
+                let available_height = ui.available_height();
+                let scroll_height = (available_height - BOTTOM_MARGIN).max(0.0);
                 egui::ScrollArea::vertical()
                     .id_salt("file_tree_scroll_area")
+                    .max_height(scroll_height)
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
                         let mut tree = build_file_tree(&self.files);
                         sort_file_tree(&mut tree, &self.files);
                         show_file_tree(ui, &tree, &mut self.files);
                     });
+                ui.add_space(BOTTOM_MARGIN);
             });
     }
 
@@ -149,8 +169,22 @@ impl MyApp {
                     ui.set_height(30.0);
                     ui.checkbox(&mut self.include_file_tree, "Include file tree in prompt");
                     ui.separator();
-                    let prompt =
-                        compute_prompt(&self.files, &self.extra_text, &self.remote.remote_urls);
+                    // build the exact output we’ll copy (and use it for token‐count too)
+                    let mut prompt = String::new();
+                    prompt.push_str(&self.extra_text);
+                    prompt.push_str("\n\n");
+                    if self.include_file_tree {
+                        let base = self
+                            .current_folder
+                            .as_deref()
+                            .unwrap_or(std::path::Path::new("."));
+                        prompt.push_str(&generate_file_tree_string(&self.files, base));
+                        prompt.push_str("\n\n");
+                    }
+                    prompt.push_str(&compute_prompt(&self.files, &self.remote.remote_urls));
+                    prompt.push_str("\n\n");
+                    prompt.push_str(&self.extra_text);
+
                     self.token_count = ((prompt.chars().count() as f32) / 4.0).ceil() as usize;
                     let formatted_token_count = self.token_count.to_formatted_string(&Locale::en);
                     ui.label(format!(
@@ -227,8 +261,14 @@ impl MyApp {
                 });
                 if ui.button("Run Command").clicked() {
                     let command = self.terminal.terminal_command.clone();
-                    let tokens: Vec<String> =
-                        command.split_whitespace().map(String::from).collect();
+                    let tokens: Vec<String> = match shell_words::split(&command) {
+                        Ok(t) => t,
+                        Err(err) => {
+                            self.terminal.terminal_output =
+                                format!("Error parsing command: {}", err);
+                            return;
+                        }
+                    };
                     if tokens.is_empty() {
                         return;
                     }
@@ -278,12 +318,6 @@ impl MyApp {
                                 .frame(true),
                         );
                     });
-                if ui.button("Copy Output to Prompt").clicked() {
-                    self.extra_text.push('\n');
-                    self.extra_text.push_str(&self.terminal.terminal_command);
-                    self.extra_text.push('\n');
-                    self.extra_text.push_str(&self.terminal.terminal_output);
-                }
             });
         });
         ctx.request_repaint();
@@ -291,24 +325,66 @@ impl MyApp {
 }
 
 fn compute_and_copy_prompt(app: &mut MyApp, ctx: &egui::Context) {
-    for file_item in app.files.iter_mut().filter(|f| f.selected) {
-        file_item.content = std::fs::read_to_string(&file_item.path).ok();
+    // preload file contents
+    for f in app.files.iter_mut().filter(|f| f.selected) {
+        f.content = std::fs::read_to_string(&f.path).ok();
     }
-    let base_prompt = compute_prompt(&app.files, &app.extra_text, &app.remote.remote_urls);
-    let final_prompt = if app.include_file_tree {
-        let base = app
-            .current_folder
-            .as_deref()
-            .unwrap_or(std::path::Path::new("."));
-        let tree_text = generate_file_tree_string(&app.files, base);
-        format!("{}\n\n{}", tree_text, base_prompt)
-    } else {
-        base_prompt
-    };
-    app.token_count = (final_prompt.chars().count() as f32 / 4.0).ceil() as usize;
-    app.generated_prompt = final_prompt.clone();
-    ctx.copy_text(final_prompt);
-    app.notification = Some(("Prompt copied to clipboard!".to_owned(), Instant::now()));
+
+    let mut xml = String::new();
+
+    // system prompt insertion
+    xml.push_str("<system_prompt>\n");
+    xml.push_str("Unless otherwise noted, provide code snippets or full files instead of using a diff format. When providing a code snippet, always include a couple lines both above and below the snippet so the user knows where to place the snippet.\n");
+    xml.push_str("</system_prompt>\n");
+
+    // top instruction
+    xml.push_str(&format!("<instruction>{}</instruction>\n", app.extra_text));
+
+    // file_tree
+    let base = app
+        .current_folder
+        .as_deref()
+        .unwrap_or(std::path::Path::new("."));
+    let tree = generate_file_tree_string(&app.files, base);
+    xml.push_str("<file_tree>\n");
+    xml.push_str(&tree);
+    xml.push_str("</file_tree>\n");
+
+    // code block for selected files
+    xml.push_str("<code>\n");
+    for f in app.files.iter().filter(|f| f.selected) {
+        xml.push_str(&format!("// file: {}\n", f.rel_path));
+        xml.push_str(f.content.as_deref().unwrap_or(""));
+        xml.push_str("\n\n");
+    }
+    xml.push_str("</code>\n\n");
+
+    // include remote URLs content
+    for remote in app.remote.remote_urls.iter().filter(|r| r.include) {
+        if let Some(content) = &remote.content {
+            xml.push_str(&format!("```{}\n", remote.url));
+            xml.push_str(content);
+            xml.push_str("\n```\n\n");
+        }
+    }
+
+    // terminal command & output
+    xml.push_str(&format!(
+        "<terminal_command>{}</terminal_command>\n",
+        app.terminal.terminal_command
+    ));
+    xml.push_str(&format!(
+        "<terminal_output>{}</terminal_output>\n",
+        app.terminal.terminal_output
+    ));
+
+    // bottom instruction
+    xml.push_str(&format!("<instruction>{}</instruction>\n", app.extra_text));
+
+    // copy & notify
+    app.generated_prompt = xml.clone();
+    ctx.copy_text(xml);
+    app.notification = Some(("Prompt copied to clipboard!".into(), Instant::now()));
 }
 
 impl Default for MyApp {
@@ -329,22 +405,9 @@ impl Default for MyApp {
             terminal: Terminal::default(),
         };
 
-        let file_paths = crate::file_item::get_all_files_limited(&cwd, MAX_FILES, &app.ignore_set);
-        for path in file_paths {
-            let rel_path = match path.strip_prefix(&cwd) {
-                Ok(rel) => rel.to_string_lossy().to_string(),
-                Err(_) => path.to_string_lossy().to_string(),
-            };
-            if app.ignore_set.is_match(&rel_path) {
-                continue;
-            }
-            app.files.push(FileItem {
-                path,
-                rel_path,
-                selected: false,
-                content: None,
-            });
-        }
+        // populate `app.files` *and* compute each file’s token_count
+        app.refresh_files();
+
         app
     }
 }

@@ -10,6 +10,7 @@ pub struct FileItem {
     pub rel_path: String,
     pub selected: bool,
     pub content: Option<String>,
+    pub token_count: usize,
 }
 
 pub fn find_ignore_file(start: &Path) -> Option<PathBuf> {

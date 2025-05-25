@@ -1,5 +1,4 @@
 mod app;
-mod code_indexer;
 mod command_runner;
 mod file_item;
 mod file_tree;

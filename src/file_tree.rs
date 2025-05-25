@@ -47,31 +47,65 @@ pub fn set_folder_selection(tree: &FileTree, files: &mut [FileItem], value: bool
     }
 }
 
+pub fn subtree_tokens(tree: &FileTree, files: &[FileItem]) -> usize {
+    let mut sum = 0;
+    for &i in &tree.files {
+        sum += files[i].token_count;
+    }
+    for sub in tree.folders.values() {
+        sum += subtree_tokens(sub, files);
+    }
+    sum
+}
+
+use egui::{CollapsingHeader, Color32, RichText};
+
 pub fn show_file_tree(ui: &mut egui::Ui, tree: &FileTree, files: &mut [FileItem]) {
+    // Folders
     for (folder_name, subtree) in &tree.folders {
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+        ui.horizontal(|ui| {
+            // temporarily remove item spacing
             let old_spacing = ui.spacing().item_spacing;
-            ui.spacing_mut().item_spacing.x = 0.5;
+            ui.spacing_mut().item_spacing.x = 0.0;
+
+            // checkbox state
             let (total, selected) = get_folder_selection_counts(subtree, files);
-            let is_indeterminate = selected > 0 && selected < total;
             let mut folder_selected = selected == total;
-            let mut checkbox = egui::Checkbox::new(&mut folder_selected, "");
-            if is_indeterminate {
-                checkbox = checkbox.indeterminate(true);
-            }
-            if ui.add(checkbox).changed() {
+            let indeterminate = selected > 0 && selected < total;
+            let mut cb = egui::Checkbox::new(&mut folder_selected, "").indeterminate(indeterminate);
+            if ui.add(cb).changed() {
                 set_folder_selection(subtree, files, folder_selected);
             }
-            ui.collapsing(folder_name, |ui| {
+
+            // 🤖 Use CollapsingHeader with id_salt to preserve expansion state
+            let total_tok = subtree_tokens(subtree, files);
+            CollapsingHeader::new(
+                RichText::new(format!("{} ({})", folder_name, total_tok))
+                    .color(Color32::from_rgb(230, 200, 120)),
+            )
+            .id_salt(folder_name)
+            .show(ui, |ui| {
                 show_file_tree(ui, subtree, files);
             });
+
+            // restore original spacing
             ui.spacing_mut().item_spacing = old_spacing;
         });
     }
+
+    // Files
     for &i in &tree.files {
         let file = &mut files[i];
-        let file_name = file.rel_path.rsplit('/').next().unwrap_or(&file.rel_path);
-        ui.checkbox(&mut file.selected, file_name);
+        let name = file.rel_path.rsplit('/').next().unwrap_or(&file.rel_path);
+        let color = if name.ends_with(".rs") {
+            Color32::from_rgb(200, 100, 100)
+        } else if name.ends_with(".md") {
+            Color32::from_rgb(100, 200, 100)
+        } else {
+            ui.visuals().text_color()
+        };
+        let label = RichText::new(format!("{} ({})", name, file.token_count)).color(color);
+        ui.checkbox(&mut file.selected, label);
     }
 }
 
