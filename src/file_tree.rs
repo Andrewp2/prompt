@@ -61,14 +61,11 @@ pub fn subtree_tokens(tree: &FileTree, files: &[FileItem]) -> usize {
 use egui::{CollapsingHeader, Color32, RichText};
 
 pub fn show_file_tree(ui: &mut egui::Ui, tree: &FileTree, files: &mut [FileItem]) {
-    // Folders
     for (folder_name, subtree) in &tree.folders {
         ui.horizontal(|ui| {
-            // temporarily remove item spacing
             let old_spacing = ui.spacing().item_spacing;
             ui.spacing_mut().item_spacing.x = 0.0;
 
-            // checkbox state
             let (total, selected) = get_folder_selection_counts(subtree, files);
             let mut folder_selected = selected == total;
             let indeterminate = selected > 0 && selected < total;
@@ -77,7 +74,6 @@ pub fn show_file_tree(ui: &mut egui::Ui, tree: &FileTree, files: &mut [FileItem]
                 set_folder_selection(subtree, files, folder_selected);
             }
 
-            // 🤖 Use CollapsingHeader with id_salt to preserve expansion state
             let total_tok = subtree_tokens(subtree, files);
             CollapsingHeader::new(
                 RichText::new(format!("{} ({})", folder_name, total_tok))
@@ -88,19 +84,52 @@ pub fn show_file_tree(ui: &mut egui::Ui, tree: &FileTree, files: &mut [FileItem]
                 show_file_tree(ui, subtree, files);
             });
 
-            // restore original spacing
             ui.spacing_mut().item_spacing = old_spacing;
         });
     }
 
-    // Files
     for &i in &tree.files {
         let file = &mut files[i];
         let name = file.rel_path.rsplit('/').next().unwrap_or(&file.rel_path);
         let color = if name.ends_with(".rs") {
-            Color32::from_rgb(200, 100, 100)
-        } else if name.ends_with(".md") {
-            Color32::from_rgb(100, 200, 100)
+            Color32::from_rgb(250, 150, 150) // Rust
+        } else if name.ends_with(".md") || name.ends_with(".txt") {
+            Color32::from_rgb(100, 250, 100) // Markdown/Text
+        } else if name.ends_with(".cu") || name.ends_with(".cuda") {
+            Color32::from_rgb(100, 150, 250) // CUDA
+        } else if name.ends_with(".o") {
+            Color32::from_rgb(150, 150, 150) // Object files
+        } else if name.ends_with(".py") {
+            Color32::from_rgb(50, 100, 250) // Python
+        } else if name.ends_with(".html") {
+            Color32::from_rgb(250, 100, 50) // HTML
+        } else if name.ends_with(".css") {
+            Color32::from_rgb(150, 100, 250) // CSS
+        } else if name.ends_with(".csv") {
+            Color32::from_rgb(100, 250, 150) // CSV
+        } else if name.ends_with(".slang") {
+            Color32::from_rgb(250, 150, 50) // Slang
+        } else if name.ends_with(".wgsl") {
+            Color32::from_rgb(250, 100, 250) // WGSL
+        } else if name.ends_with(".png")
+            || name.ends_with(".exr")
+            || name.ends_with(".hdr")
+            || name.ends_with(".jpg")
+            || name.ends_with(".jpeg")
+        {
+            Color32::from_rgb(250, 250, 100) // Images
+        } else if name.ends_with(".gltf") || name.ends_with(".glb") {
+            Color32::from_rgb(100, 250, 250) // GLTF/GLB
+        } else if name.ends_with(".spv") || name.ends_with(".spvasm") {
+            Color32::from_rgb(150, 100, 150) // SPIR-V
+        } else if name.ends_with(".glsl") || name.ends_with(".comp") {
+            Color32::from_rgb(100, 150, 250) // GLSL/Compute Shaders
+        } else if name.ends_with(".sh") {
+            Color32::from_rgb(150, 250, 100) // Shell scripts
+        } else if name.ends_with(".lock") {
+            Color32::from_rgb(250, 100, 100) // Lock files (same as Rust for consistency)
+        } else if name.ends_with(".toml") {
+            Color32::from_rgb(250, 150, 150) // TOML
         } else {
             ui.visuals().text_color()
         };

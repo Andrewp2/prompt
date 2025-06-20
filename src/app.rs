@@ -5,6 +5,7 @@ use crate::{
     prompt_builder::{compute_prompt, extract_text},
     remote::{Remote, RemoteUpdate, RemoteUrl},
 };
+use clipboard::{ClipboardContext, ClipboardProvider};
 use core::f32;
 use eframe::egui;
 use globset::GlobSet;
@@ -132,7 +133,7 @@ impl MyApp {
         const BOTTOM_MARGIN: f32 = 8.0;
         egui::SidePanel::left("left_panel")
             .resizable(true)
-            .default_width(300.0)
+            .default_width(500.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     if ui.button("Select Folder").clicked() {
@@ -161,6 +162,48 @@ impl MyApp {
             });
     }
 
+    fn strip_comments(text: &str) -> String {
+        text.lines()
+            .map(|line| {
+                let mut in_string = false;
+                let mut string_char = '\0';
+                let mut prev_escape = false;
+                let mut out = String::new();
+                let chars: Vec<char> = line.chars().collect();
+                let mut i = 0;
+
+                while i < chars.len() {
+                    let c = chars[i];
+
+                    if !in_string && i + 1 < chars.len() && c == '/' && chars[i + 1] == '/' {
+                        break;
+                    }
+
+                    if !in_string && c == '#' {
+                        break;
+                    }
+
+                    if (c == '"' || c == '\'') && !prev_escape {
+                        if in_string && string_char == c {
+                            in_string = false;
+                        } else if !in_string {
+                            in_string = true;
+                            string_char = c;
+                        }
+                    }
+
+                    prev_escape = (c == '\\' && !prev_escape);
+                    out.push(c);
+                    i += 1;
+                }
+
+                out.trim_end().to_string()
+            })
+            .filter(|l| !l.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn bottom_panel(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("bottom_panel")
             .resizable(false)
@@ -169,7 +212,7 @@ impl MyApp {
                     ui.set_height(30.0);
                     ui.checkbox(&mut self.include_file_tree, "Include file tree in prompt");
                     ui.separator();
-                    // build the exact output we’ll copy (and use it for token‐count too)
+
                     let mut prompt = String::new();
                     prompt.push_str(&self.extra_text);
                     prompt.push_str("\n\n");
@@ -195,6 +238,14 @@ impl MyApp {
                     ui.separator();
                     if ui.button("Copy Prompt").clicked() {
                         compute_and_copy_prompt(self, ctx);
+                    }
+                    if ui.button("Remove Comments from Clipboard").clicked() {
+                        let mut cb: ClipboardContext = ClipboardProvider::new().unwrap();
+                        let contents = cb.get_contents().unwrap_or_default();
+                        let cleaned = MyApp::strip_comments(&contents);
+                        let _ = cb.set_contents(cleaned);
+                        self.notification =
+                            Some(("Comments removed from clipboard!".into(), Instant::now()));
                     }
                     const NOTIFICATION_DURATION: f32 = 3.0;
                     if let Some((message, start)) = &self.notification {
@@ -237,13 +288,6 @@ impl MyApp {
                         );
                     });
 
-                // ui.add(
-                //     egui::TextEdit::multiline(&mut self.extra_text)
-                //         .lock_focus(true)
-                //         .desired_width(f32::INFINITY)
-                //         .desired_rows(8)
-                //         .frame(true),
-                // );
                 ui.separator();
                 ui.heading("Terminal Command");
                 ui.add(
@@ -299,13 +343,7 @@ impl MyApp {
                 }
                 ui.separator();
                 ui.label("Terminal Output:");
-                // ui.add(
-                //     egui::TextEdit::multiline(&mut self.terminal.terminal_output)
-                //         .lock_focus(true)
-                //         .desired_width(f32::INFINITY)
-                //         .frame(true)
-                //         .desired_rows(8),
-                // );
+
                 egui::ScrollArea::vertical()
                     .max_height(350.0)
                     .id_salt("terminal_output_scroll_area")
@@ -325,22 +363,18 @@ impl MyApp {
 }
 
 fn compute_and_copy_prompt(app: &mut MyApp, ctx: &egui::Context) {
-    // preload file contents
     for f in app.files.iter_mut().filter(|f| f.selected) {
         f.content = std::fs::read_to_string(&f.path).ok();
     }
 
     let mut xml = String::new();
 
-    // system prompt insertion
     xml.push_str("<system_prompt>\n");
     xml.push_str("Unless otherwise noted, provide code snippets or full files instead of using a diff format. When providing a code snippet, always include a couple lines both above and below the snippet so the user knows where to place the snippet.\n");
     xml.push_str("</system_prompt>\n");
 
-    // top instruction
     xml.push_str(&format!("<instruction>{}</instruction>\n", app.extra_text));
 
-    // file_tree
     let base = app
         .current_folder
         .as_deref()
@@ -350,16 +384,14 @@ fn compute_and_copy_prompt(app: &mut MyApp, ctx: &egui::Context) {
     xml.push_str(&tree);
     xml.push_str("</file_tree>\n");
 
-    // code block for selected files
     xml.push_str("<code>\n");
     for f in app.files.iter().filter(|f| f.selected) {
-        xml.push_str(&format!("// file: {}\n", f.rel_path));
+        xml.push_str(&format!("<file path={}>", f.rel_path));
         xml.push_str(f.content.as_deref().unwrap_or(""));
-        xml.push_str("\n\n");
+        xml.push_str("</file>");
     }
     xml.push_str("</code>\n\n");
 
-    // include remote URLs content
     for remote in app.remote.remote_urls.iter().filter(|r| r.include) {
         if let Some(content) = &remote.content {
             xml.push_str(&format!("```{}\n", remote.url));
@@ -368,7 +400,6 @@ fn compute_and_copy_prompt(app: &mut MyApp, ctx: &egui::Context) {
         }
     }
 
-    // terminal command & output
     xml.push_str(&format!(
         "<terminal_command>{}</terminal_command>\n",
         app.terminal.terminal_command
@@ -378,10 +409,8 @@ fn compute_and_copy_prompt(app: &mut MyApp, ctx: &egui::Context) {
         app.terminal.terminal_output
     ));
 
-    // bottom instruction
     xml.push_str(&format!("<instruction>{}</instruction>\n", app.extra_text));
 
-    // copy & notify
     app.generated_prompt = xml.clone();
     ctx.copy_text(xml);
     app.notification = Some(("Prompt copied to clipboard!".into(), Instant::now()));
@@ -405,7 +434,6 @@ impl Default for MyApp {
             terminal: Terminal::default(),
         };
 
-        // populate `app.files` *and* compute each file’s token_count
         app.refresh_files();
 
         app
