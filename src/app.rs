@@ -145,6 +145,11 @@ impl MyApp {
                     if ui.button("Refresh").clicked() {
                         self.refresh_files();
                     }
+                    if ui.button("Clear Selection").clicked() {
+                        for file in self.files.iter_mut() {
+                            file.selected = false;
+                        }
+                    }
                 });
                 ui.separator();
                 let available_height = ui.available_height();
@@ -192,7 +197,7 @@ impl MyApp {
                         }
                     }
 
-                    prev_escape = (c == '\\' && !prev_escape);
+                    prev_escape = c == '\\' && !prev_escape;
                     out.push(c);
                     i += 1;
                 }
