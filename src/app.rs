@@ -266,7 +266,10 @@ impl MyApp {
                                 ),
                             );
                             ui.label(text);
-                            ctx.request_repaint();
+                            if self.notification.is_some() {
+                                // one more frame for the fade-out animation, then we’re done
+                                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+                            }
                         } else {
                             self.notification = None;
                         }
@@ -363,7 +366,10 @@ impl MyApp {
                     });
             });
         });
-        ctx.request_repaint();
+        if self.notification.is_some() {
+            // one more frame for the fade-out animation, then we’re done
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
     }
 }
 
