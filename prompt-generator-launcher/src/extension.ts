@@ -2,22 +2,26 @@ import * as vscode from 'vscode';
 import { spawn } from 'child_process';
 
 export function activate(context: vscode.ExtensionContext) {
-  let disposable = vscode.commands.registerCommand('promptGenerator.open', (uri: vscode.Uri) => {
-    // The uri passed in represents the selected folder.
+  let disposable = vscode.commands.registerCommand('promptGenerator.open', async (uri: vscode.Uri) => {
     const folderPath = uri.fsPath;
 
-    // Specify the path to your Prompt Generator binary.
-    // If the binary is in your PATH, you can simply use its name (e.g., "prompt").
-    // Otherwise, provide the full absolute path.
-    const promptBinary = '/home/andrew-peterson/code/prompt/target/release/prompt'; // or "/absolute/path/to/prompt"
+    // 🤖 allow user override via settings; else fallback to 'prompt' on PATH
+    const cfg = vscode.workspace.getConfiguration('promptGenerator');
+    const configured = cfg.get<string>('binaryPath')?.trim();
+    const promptBinary = configured && configured.length > 0 ? configured : 'prompt';
 
-    // Launch the Prompt Generator with the folder as argument.
-    const child = spawn(promptBinary, [folderPath], {
-      detached: true,
-      stdio: 'ignore',
-      cwd: folderPath
-    });
-    child.unref();
+    try {
+      const child = spawn(promptBinary, [folderPath], {
+        detached: true,
+        stdio: 'ignore',
+        cwd: folderPath,
+      });
+      child.unref();
+    } catch (err: any) {
+      vscode.window.showErrorMessage(
+        `Prompt Generator failed to start. Set "promptGenerator.binaryPath" or put 'prompt' in PATH. (${String(err)})`
+      );
+    }
   });
 
   context.subscriptions.push(disposable);

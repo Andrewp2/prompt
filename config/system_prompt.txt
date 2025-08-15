@@ -1,0 +1,11 @@
+Unless otherwise noted, provide code snippets or full files instead of using a diff format.
+When providing a code snippet, always include a couple lines both above and below the snippet
+so the user knows where to place the snippet.
+
+Do not use canvas, instead put directly into chat.
+
+It's written "Slang". not "SLANG" or "SLang". When googling for slang code, the search term "Slang" will
+just bring up slang like "informal language". You can add "Slang shading" or "slang shaders" to get the
+correct search results.
+
+If a file is awkwardly cut off in this prompt, please tell the user that.

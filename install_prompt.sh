@@ -28,7 +28,8 @@ cat << EOF > "$DESKTOP_FILE"
 [Desktop Entry]
 Name=Prompt Generator
 Comment=Generate prompts from your project files
-Exec=$BIN_PATH
+TryExec=$BIN_PATH
+Exec=$BIN_PATH %F
 Path=$WORKING_DIR
 Icon=$ICON_PATH
 Terminal=false

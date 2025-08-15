@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+# 🤖 Default to the more recently maintained tokenizer (tiktoken-rs)
+default = ["tokenizer-tiktoken"]
+tokenizer-tiktoken = ["dep:tiktoken-rs"]
+tokenizer-gpt-tokenizer = ["dep:gpt_tokenizer"]
+
 [dependencies]
 eframe = "0.31"
 egui = "0.31"
@@ -18,3 +24,13 @@ async-openai = "0.28.1"
 tokio = "1.44.2"
 shell-words = "1.1"
 clipboard = "0.5.0"
+
+# 🤖 new: cache tokenizer objects safely
+once_cell = "1.19"
+
+# 🤖 default tokenizer (recent & maintained)
+tiktoken-rs = { version = "0.7", optional = true }
+
+# 🤖 alternate (older) tokenizer you can force with: --no-default-features --features tokenizer-gpt-tokenizer
+gpt_tokenizer = { version = "0.1", optional = true }
+rayon = "1.11.0"

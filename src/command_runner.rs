@@ -1,3 +1,4 @@
+// ... a couple lines above
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
@@ -29,6 +30,7 @@ impl Default for Terminal {
     }
 }
 
+// 🤖 Added `env_overrides` to pass leading KEY=VAL tokens into the child process
 pub fn run_command(
     working_dir: &Path,
     cmd: &str,
@@ -37,14 +39,17 @@ pub fn run_command(
     last_n: usize,
     do_timeout: bool,
     max_duration: Duration,
+    env_overrides: &[(String, String)],
 ) -> String {
-    let child = Command::new(cmd)
+    let mut command = Command::new(cmd);
+    command
         .args(args)
-        .current_dir(working_dir) // Set the working directory here.
+        .current_dir(working_dir) // 🤖 run inside the selected folder
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to spawn command");
+        .envs(env_overrides.iter().map(|(k, v)| (k.as_str(), v.as_str()))); // 🤖 apply env vars
+
+    let child = command.spawn().expect("Failed to spawn command");
 
     println!(
         "Starting child command {} {:?} in {:?}",
@@ -55,7 +60,7 @@ pub fn run_command(
         let child_id = child.id();
         let (tx, rx) = mpsc::channel();
 
-        // Spawn a thread that waits for the process output.
+        // 🤖 wait for output in a helper thread
         std::thread::spawn(move || {
             let output = child
                 .wait_with_output()
@@ -63,12 +68,11 @@ pub fn run_command(
             let _ = tx.send(output);
         });
 
-        // Wait for the output with a timeout.
-        let output = match rx.recv_timeout(max_duration) {
+        match rx.recv_timeout(max_duration) {
             Ok(output) => output,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 println!("Timeout reached after {:?}", max_duration);
-                // Kill the process if the timeout is reached.
+                // 🤖 hard-kill on timeout to avoid zombie processes
                 #[cfg(unix)]
                 {
                     let _ = Command::new("kill")
@@ -84,7 +88,7 @@ pub fn run_command(
                         .arg("/F")
                         .status();
                 }
-                // Optionally, wait for the process to finish after killing it.
+
                 rx.recv().unwrap_or_else(|_| Output {
                     status: std::process::ExitStatus::from_raw(1),
                     stdout: Vec::new(),
@@ -92,17 +96,17 @@ pub fn run_command(
                 })
             }
             Err(e) => panic!("Error waiting for command output: {:?}", e),
-        };
-
-        output
+        }
     } else {
         child
             .wait_with_output()
             .expect("Failed to wait on child process")
     };
+
     get_head_and_tail(first_n, last_n, output)
 }
 
+// ... a couple lines below
 fn get_head_and_tail(first_n: usize, last_n: usize, output: Output) -> String {
     let mut combined = String::new();
     combined.push_str(&String::from_utf8_lossy(&output.stdout));

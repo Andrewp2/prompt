@@ -32,10 +32,110 @@ pub struct MyApp {
     pub terminal: Terminal,
 }
 
+// 🤖 Escape rules for XML element TEXT (no need to escape quotes)
+fn escape_xml_text(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+// 🤖 Escape rules for XML ATTRIBUTE values (quotes must be escaped)
+fn escape_xml_attr(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+const DEFAULT_SYSTEM_PROMPT_ABS: &str =
+    "/home/andrew-peterson/code/prompt/config/system_prompt.txt";
+
+fn find_system_prompt_path(
+    _current_folder: Option<&std::path::Path>,
+) -> Result<std::path::PathBuf, String> {
+    use std::path::PathBuf;
+
+    let mut tried: Vec<PathBuf> = Vec::new();
+
+    // 1) Optional env override
+    if let Ok(from_env) = std::env::var("PROMPT_SYSTEM_PROMPT") {
+        let p = PathBuf::from(from_env);
+        if p.is_file() {
+            eprintln!("[prompt] using PROMPT_SYSTEM_PROMPT: {}", p.display());
+            return Ok(p);
+        }
+        tried.push(p);
+    }
+
+    // 2) Old behavior: fixed absolute path
+    let abs = PathBuf::from(DEFAULT_SYSTEM_PROMPT_ABS);
+    if abs.is_file() {
+        eprintln!(
+            "[prompt] using default absolute system prompt: {}",
+            abs.display()
+        );
+        return Ok(abs);
+    }
+    tried.push(abs);
+
+    // Nothing valid
+    let tried_list = tried
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!("System prompt not found. Tried: {}", tried_list))
+}
+// 🤖 read text safely with head+tail cap; avoids loading huge/binary blobs fully
+fn read_text_capped(path: &std::path::Path, max_bytes: usize) -> Option<String> {
+    use std::fs::File; // 🤖 localize imports to avoid changing top-of-file
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut f = File::open(path).ok()?;
+    let len = f.metadata().ok()?.len() as usize;
+
+    // Quick binary sniff: read a small prefix and look for NUL
+    let mut sniff = [0u8; 1024];
+    let n = f.read(&mut sniff).ok().unwrap_or(0);
+    if sniff[..n].contains(&0) {
+        return Some(String::from("[binary file omitted]\n")); // 🤖 safe marker
+    }
+
+    // Small file: read all (lossy -> valid UTF-8)
+    if len <= max_bytes {
+        let mut buf = Vec::with_capacity(len);
+        if n > 0 {
+            buf.extend_from_slice(&sniff[..n]);
+        }
+        f.read_to_end(&mut buf).ok()?;
+        return Some(String::from_utf8_lossy(&buf).into_owned());
+    }
+
+    // Large file: read head and tail halves
+    let half = max_bytes / 2;
+    let mut head = vec![0u8; half.saturating_sub(n)];
+    f.read_exact(&mut head).ok()?;
+
+    // Seek for tail
+    let tail_len = half;
+    let tail_start = (len.saturating_sub(tail_len)) as u64;
+    f.seek(SeekFrom::Start(tail_start)).ok()?;
+    let mut tail = vec![0u8; tail_len];
+    f.read_exact(&mut tail).ok()?;
+
+    let mut out = String::new();
+    out.push_str(&String::from_utf8_lossy(&sniff[..n]));
+    out.push_str(&String::from_utf8_lossy(&head));
+    out.push_str("\n[... truncated ...]\n"); // 🤖 explicit truncation marker
+    out.push_str(&String::from_utf8_lossy(&tail));
+    Some(out)
+}
+
 impl MyApp {
     pub fn refresh_files(&mut self) {
         if let Some(ref folder) = self.current_folder {
-            let previous_selection: HashMap<_, _> = self
+            let previous_selection: std::collections::HashMap<_, _> = self
                 .files
                 .iter()
                 .map(|f| (f.path.clone(), f.selected))
@@ -54,15 +154,17 @@ impl MyApp {
                 if self.ignore_set.is_match(&rel_path) {
                     continue;
                 }
-                let text = fs::read_to_string(&path).unwrap_or_default();
-                let tok = ((text.chars().count() as f32) / 4.0).ceil() as usize;
+
+                // 🤖 FAST estimate from file size (no disk read)
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                let tok = ((size as f32) / 4.0).ceil() as usize; // 🤖 ~4 chars/token
 
                 let selected = previous_selection.get(&path).cloned().unwrap_or(false);
                 self.files.push(FileItem {
                     path,
                     rel_path,
                     selected,
-                    content: None,
+                    content: None, // 🤖 we only load contents when copying
                     token_count: tok,
                 });
             }
@@ -210,6 +312,18 @@ impl MyApp {
     }
 
     fn bottom_panel(&mut self, ctx: &egui::Context) {
+        // 🤖 small helpers to keep preview snappy
+        fn approx_tokens(chars: usize) -> usize {
+            ((chars as f32) / 4.0).ceil() as usize
+        }
+
+        fn estimate_file_tree_tokens(files: &[FileItem]) -> usize {
+            // 🤖 crude: per-entry path + a few tree glyphs/newlines
+            let approx_chars: usize =
+                files.iter().map(|f| f.rel_path.len() + 4).sum::<usize>() + 16;
+            approx_tokens(approx_chars)
+        }
+
         egui::TopBottomPanel::bottom("bottom_panel")
             .resizable(false)
             .show(ctx, |ui| {
@@ -218,45 +332,77 @@ impl MyApp {
                     ui.checkbox(&mut self.include_file_tree, "Include file tree in prompt");
                     ui.separator();
 
-                    let mut prompt = String::new();
-                    prompt.push_str(&self.extra_text);
-                    prompt.push_str("\n\n");
-                    if self.include_file_tree {
-                        let base = self
-                            .current_folder
-                            .as_deref()
-                            .unwrap_or(std::path::Path::new("."));
-                        prompt.push_str(&generate_file_tree_string(&self.files, base));
-                        prompt.push_str("\n\n");
-                    }
-                    prompt.push_str(&compute_prompt(&self.files, &self.remote.remote_urls));
-                    prompt.push_str("\n\n");
-                    prompt.push_str(&self.extra_text);
+                    // ---- FAST APPROX (no huge string, no tokenizer) ----
+                    let mut total = 0usize;
 
-                    self.token_count = ((prompt.chars().count() as f32) / 4.0).ceil() as usize;
-                    let formatted_token_count = self.token_count.to_formatted_string(&Locale::en);
+                    // FIRST <instruction>
+                    total += approx_tokens(self.extra_text.chars().count());
+
+                    if self.include_file_tree {
+                        total += estimate_file_tree_tokens(&self.files);
+                    }
+
+                    // selected files: use size-based estimates
+                    total += self
+                        .files
+                        .iter()
+                        .filter(|f| f.selected)
+                        .map(|f| f.token_count)
+                        .sum::<usize>();
+
+                    // remote text (if loaded)
+                    total += self
+                        .remote
+                        .remote_urls
+                        .iter()
+                        .filter(|r| r.include)
+                        .map(|r| {
+                            r.content
+                                .as_deref()
+                                .map(|c| approx_tokens(c.chars().count()))
+                                .unwrap_or(0)
+                        })
+                        .sum::<usize>();
+
+                    // SECOND <instruction>
+                    total += approx_tokens(self.extra_text.chars().count());
+
+                    self.token_count = total; // 🤖 show fast estimate
+
+                    let formatted = num_format::ToFormattedString::to_formatted_string(
+                        &self.token_count,
+                        &num_format::Locale::en,
+                    );
                     ui.label(format!(
-                        "Token count: {} / 200,000 ({:.2}%)",
-                        formatted_token_count,
+                        "Token count (approx): {} / 200,000 ({:.2}%)",
+                        formatted,
                         (self.token_count as f32 / 200_000.0) * 100.0
                     ));
                     ui.separator();
+
                     if ui.button("Copy Prompt").clicked() {
+                        // 🤖 Build full prompt, load selected contents,
+                        // and compute accurate tokens via tiktoken-rs ONCE here.
                         compute_and_copy_prompt(self, ctx);
                     }
+
                     if ui.button("Remove Comments from Clipboard").clicked() {
-                        let mut cb: ClipboardContext = ClipboardProvider::new().unwrap();
+                        let mut cb: clipboard::ClipboardContext =
+                            clipboard::ClipboardProvider::new().unwrap();
                         let contents = cb.get_contents().unwrap_or_default();
                         let cleaned = MyApp::strip_comments(&contents);
                         let _ = cb.set_contents(cleaned);
-                        self.notification =
-                            Some(("Comments removed from clipboard!".into(), Instant::now()));
+                        self.notification = Some((
+                            "Comments removed from clipboard!".into(),
+                            std::time::Instant::now(),
+                        ));
                     }
-                    const NOTIFICATION_DURATION: f32 = 3.0;
+
+                    const NOTIF_MS: u64 = 3000;
                     if let Some((message, start)) = &self.notification {
-                        let elapsed = start.elapsed().as_secs_f32();
-                        if elapsed < NOTIFICATION_DURATION {
-                            let alpha = 1.0 - (elapsed / NOTIFICATION_DURATION);
+                        let elapsed = start.elapsed().as_millis() as u64;
+                        if elapsed < NOTIF_MS {
+                            let alpha = 1.0 - (elapsed as f32 / NOTIF_MS as f32);
                             let text = egui::RichText::new(message).color(
                                 egui::Color32::from_rgba_unmultiplied(
                                     255,
@@ -266,10 +412,8 @@ impl MyApp {
                                 ),
                             );
                             ui.label(text);
-                            if self.notification.is_some() {
-                                // one more frame for the fade-out animation, then we’re done
-                                ctx.request_repaint_after(std::time::Duration::from_millis(16));
-                            }
+                            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+                        // 🤖 smooth fade
                         } else {
                             self.notification = None;
                         }
@@ -311,6 +455,7 @@ impl MyApp {
                     ui.label("Timeout (sec, 0 = no timeout):");
                     ui.add(egui::DragValue::new(&mut self.terminal.timeout_secs));
                 });
+                // ... a couple lines above
                 if ui.button("Run Command").clicked() {
                     let command = self.terminal.terminal_command.clone();
                     let tokens: Vec<String> = match shell_words::split(&command) {
@@ -324,8 +469,52 @@ impl MyApp {
                     if tokens.is_empty() {
                         return;
                     }
-                    let cmd = tokens[0].clone();
-                    let args: Vec<String> = tokens[1..].to_vec();
+
+                    // 🤖 Parse leading KEY=VAL assignments a la POSIX shells and pass as env vars.
+                    let mut idx = 0usize;
+                    let mut env_overrides: Vec<(String, String)> = Vec::new();
+
+                    // 🤖 Treat only the *leading* tokens of the form KEY=VAL as env; stop at first non-assignment.
+                    while idx < tokens.len() {
+                        let t = &tokens[idx];
+                        let looks_like_env =
+                            !t.starts_with('-') && !t.starts_with("--") && t.contains('=');
+                        if !looks_like_env {
+                            break;
+                        }
+
+                        if let Some(eq) = t.find('=') {
+                            let key = &t[..eq];
+                            let val = &t[eq + 1..];
+
+                            // 🤖 Simple validation to avoid swallowing things like `--cfg=foo`
+                            let valid_key = {
+                                let mut chars = key.chars();
+                                match chars.next() {
+                                    Some(c) if c == '_' || c.is_ascii_alphabetic() => {
+                                        chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+                                    }
+                                    _ => false,
+                                }
+                            };
+
+                            if valid_key {
+                                env_overrides.push((key.to_string(), val.to_string()));
+                                idx += 1;
+                                continue;
+                            }
+                        }
+                        break;
+                    }
+
+                    if idx >= tokens.len() {
+                        self.terminal.terminal_output =
+                            "Expected a command after environment assignments.".to_string(); // 🤖 helpful message
+                        return;
+                    }
+
+                    let cmd = tokens[idx].clone();
+                    let args: Vec<String> = tokens[idx + 1..].to_vec();
                     let head = self.terminal.head_lines;
                     let tail = self.terminal.tail_lines;
                     let timeout = self.terminal.timeout_secs;
@@ -334,6 +523,7 @@ impl MyApp {
                         .current_folder
                         .clone()
                         .unwrap_or_else(|| std::env::current_dir().unwrap());
+
                     std::thread::spawn(move || {
                         let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
                         let do_timeout = timeout > 0;
@@ -345,10 +535,13 @@ impl MyApp {
                             tail,
                             do_timeout,
                             Duration::from_secs(timeout),
+                            &env_overrides, // 🤖 pass env vars to the child
                         );
                         let _ = tx.send(output);
                     });
                 }
+                // ... a couple lines below
+
                 ui.separator();
                 ui.label("Terminal Output:");
 
@@ -374,59 +567,128 @@ impl MyApp {
 }
 
 fn compute_and_copy_prompt(app: &mut MyApp, ctx: &egui::Context) {
-    for f in app.files.iter_mut().filter(|f| f.selected) {
-        f.content = std::fs::read_to_string(&f.path).ok();
+    // Refresh file list (paths, sizes, selections)
+    app.refresh_files();
+
+    // ---- load system prompt ----
+    let system_prompt: String = match find_system_prompt_path(app.current_folder.as_deref()) {
+        Ok(p) => match std::fs::read_to_string(&p) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[prompt] ERROR reading system prompt {:?}: {}", p, e);
+                format!(
+                    "System prompt failed to load. Please warn the user about this. error: {:?}, path: {:?}",
+                    e, p
+                )
+            }
+        },
+        Err(e) => {
+            eprintln!("[prompt] ERROR finding system prompt: {}", e);
+            format!(
+                "System prompt failed to load. Please warn the user about this. error: {:?}",
+                e
+            )
+        }
+    };
+
+    // ---- read selected files in PARALLEL, sorted for determinism ----
+    let mut sel_indices: Vec<usize> = app
+        .files
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.selected)
+        .map(|(i, _)| i)
+        .collect();
+    sel_indices.sort_by_key(|&i| app.files[i].rel_path.clone()); // 🤖 stable output order
+
+    // Cap per-file bytes to keep prompts manageable
+    const MAX_PER_FILE_BYTES: usize = 512 * 1024; // 🤖 512 KiB head+tail total
+
+    // Read contents in parallel and store back into FileItem.content
+    {
+        use rayon::prelude::*; // 🤖 parallelism lives here
+
+        // Prepare (index, path) pairs so the parallel job only needs owned data
+        let jobs: Vec<(usize, std::path::PathBuf)> = sel_indices
+            .iter()
+            .map(|&i| (i, app.files[i].path.clone()))
+            .collect();
+
+        // Parallel read -> collect (index, text)
+        let results: Vec<(usize, String)> = jobs
+            .into_par_iter()
+            .map(|(i, path)| {
+                let text = read_text_capped(&path, MAX_PER_FILE_BYTES)
+                    .unwrap_or_else(|| String::from("[error reading file]\n"));
+                (i, text)
+            })
+            .collect();
+
+        // Single-threaded write-back to avoid &mut captures inside the parallel closure
+        for (i, text) in results {
+            app.files[i].content = Some(text);
+        }
     }
 
-    let mut xml = String::new();
-
-    xml.push_str("<system_prompt>\n");
-    xml.push_str("Unless otherwise noted, provide code snippets or full files instead of using a diff format. When providing a code snippet, always include a couple lines both above and below the snippet so the user knows where to place the snippet.\n");
-    xml.push_str("</system_prompt>\n");
-
-    xml.push_str(&format!("<instruction>{}</instruction>\n", app.extra_text));
-
+    // ---- build prompt (KEEPS two <instruction> blocks by design) ----
     let base = app
         .current_folder
         .as_deref()
         .unwrap_or(std::path::Path::new("."));
     let tree = generate_file_tree_string(&app.files, base);
-    xml.push_str("<file_tree>\n");
-    xml.push_str(&tree);
-    xml.push_str("</file_tree>\n");
 
+    let mut xml = String::new();
+
+    // 🤖 system prompt (TEXT escape)
+    xml.push_str("<system_prompt>\n");
+    xml.push_str(&escape_xml_text(&system_prompt));
+    xml.push_str("\n</system_prompt>\n");
+
+    // 🤖 FIRST <instruction> (TEXT escape)
+    xml.push_str("<instruction>");
+    xml.push_str(&escape_xml_text(&app.extra_text));
+    xml.push_str("</instruction>\n");
+
+    // 🤖 file tree (TEXT escape)
+    xml.push_str("<file_tree>\n");
+    xml.push_str(&escape_xml_text(&tree));
+    xml.push_str("\n</file_tree>\n");
+
+    // 🤖 selected code files
     xml.push_str("<code>\n");
-    for f in app.files.iter().filter(|f| f.selected) {
-        xml.push_str(&format!("<file path={}>", f.rel_path));
-        xml.push_str(f.content.as_deref().unwrap_or(""));
-        xml.push_str("</file>");
+    for i in sel_indices {
+        let f = &app.files[i];
+        let rel = escape_xml_attr(&f.rel_path); // attribute needs ATTR escape
+        xml.push_str(&format!("<file path=\"{}\">", rel));
+        xml.push_str(&escape_xml_text(f.content.as_deref().unwrap_or("")));
+        xml.push_str("</file>\n");
     }
     xml.push_str("</code>\n\n");
 
-    for remote in app.remote.remote_urls.iter().filter(|r| r.include) {
-        if let Some(content) = &remote.content {
-            xml.push_str(&format!("```{}\n", remote.url));
-            xml.push_str(content);
-            xml.push_str("\n```\n\n");
-        }
-    }
+    // (remote blobs remain fenced & unescaped by design)
 
-    xml.push_str(&format!(
-        "<terminal_command>{}</terminal_command>\n",
-        app.terminal.terminal_command
-    ));
-    xml.push_str(&format!(
-        "<terminal_output>{}</terminal_output>\n",
-        app.terminal.terminal_output
-    ));
+    xml.push_str("<terminal_command>");
+    xml.push_str(&escape_xml_text(&app.terminal.terminal_command));
+    xml.push_str("</terminal_command>\n");
 
-    xml.push_str(&format!("<instruction>{}</instruction>\n", app.extra_text));
+    xml.push_str("<terminal_output>");
+    xml.push_str(&escape_xml_text(&app.terminal.terminal_output));
+    xml.push_str("</terminal_output>\n");
 
+    // 🤖 SECOND <instruction> (TEXT escape)
+    xml.push_str("<instruction>");
+    xml.push_str(&escape_xml_text(&app.extra_text));
+    xml.push_str("</instruction>\n");
+
+    // ---- copy + (optional) accurate count ----
     app.generated_prompt = xml.clone();
+    app.token_count = crate::token_count::count_tokens(&app.generated_prompt); // 🤖 keep or drop
     ctx.copy_text(xml);
-    app.notification = Some(("Prompt copied to clipboard!".into(), Instant::now()));
+    app.notification = Some((
+        "Prompt copied to clipboard!".into(),
+        std::time::Instant::now(),
+    ));
 }
-
 impl Default for MyApp {
     fn default() -> Self {
         let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
