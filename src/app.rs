@@ -48,6 +48,20 @@ fn escape_xml_attr(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+fn cdata_wrap(s: &str) -> String {
+    let safe = s.replace("]]>", "]]]]><![CDATA[>");
+    format!("<![CDATA[{}]]>", safe)
+}
+
+// 🤖 Escape rules for XML ATTRIBUTE values (quotes must be escaped)
+fn escape_xml_attr(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 const DEFAULT_SYSTEM_PROMPT_ABS: &str =
     "/home/andrew-peterson/code/prompt/config/system_prompt.txt";
 
@@ -639,50 +653,49 @@ fn compute_and_copy_prompt(app: &mut MyApp, ctx: &egui::Context) {
 
     let mut xml = String::new();
 
-    // 🤖 system prompt (TEXT escape)
+    // system prompt
     xml.push_str("<system_prompt>\n");
-    xml.push_str(&escape_xml_text(&system_prompt));
+    xml.push_str(&cdata_wrap(&system_prompt));
     xml.push_str("\n</system_prompt>\n");
 
-    // 🤖 FIRST <instruction> (TEXT escape)
+    // FIRST instruction
     xml.push_str("<instruction>");
-    xml.push_str(&escape_xml_text(&app.extra_text));
+    xml.push_str(&cdata_wrap(&app.extra_text));
     xml.push_str("</instruction>\n");
 
-    // 🤖 file tree (TEXT escape)
+    // file tree
     xml.push_str("<file_tree>\n");
-    xml.push_str(&escape_xml_text(&tree));
+    xml.push_str(&cdata_wrap(&tree));
     xml.push_str("\n</file_tree>\n");
 
-    // 🤖 selected code files
+    // selected code files
     xml.push_str("<code>\n");
     for i in sel_indices {
         let f = &app.files[i];
-        let rel = escape_xml_attr(&f.rel_path); // attribute needs ATTR escape
+        let rel = escape_xml_attr(&f.rel_path); // attribute still needs escaping
         xml.push_str(&format!("<file path=\"{}\">", rel));
-        xml.push_str(&escape_xml_text(f.content.as_deref().unwrap_or("")));
+        xml.push_str(&cdata_wrap(f.content.as_deref().unwrap_or("")));
         xml.push_str("</file>\n");
     }
     xml.push_str("</code>\n\n");
 
-    // (remote blobs remain fenced & unescaped by design)
-
+    // terminal bits
     xml.push_str("<terminal_command>");
-    xml.push_str(&escape_xml_text(&app.terminal.terminal_command));
+    xml.push_str(&cdata_wrap(&app.terminal.terminal_command));
     xml.push_str("</terminal_command>\n");
 
     xml.push_str("<terminal_output>");
-    xml.push_str(&escape_xml_text(&app.terminal.terminal_output));
+    xml.push_str(&cdata_wrap(&app.terminal.terminal_output));
     xml.push_str("</terminal_output>\n");
 
-    // 🤖 SECOND <instruction> (TEXT escape)
+    // SECOND instruction
     xml.push_str("<instruction>");
-    xml.push_str(&escape_xml_text(&app.extra_text));
+    xml.push_str(&cdata_wrap(&app.extra_text));
     xml.push_str("</instruction>\n");
 
     // ---- copy + (optional) accurate count ----
     app.generated_prompt = xml.clone();
-    app.token_count = crate::token_count::count_tokens(&app.generated_prompt); // 🤖 keep or drop
+    app.token_count = crate::token_count::count_tokens(&app.generated_prompt);
     ctx.copy_text(xml);
     app.notification = Some((
         "Prompt copied to clipboard!".into(),
