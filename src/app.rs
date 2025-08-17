@@ -32,22 +32,6 @@ pub struct MyApp {
     pub terminal: Terminal,
 }
 
-// 🤖 Escape rules for XML element TEXT (no need to escape quotes)
-fn escape_xml_text(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-// 🤖 Escape rules for XML ATTRIBUTE values (quotes must be escaped)
-fn escape_xml_attr(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
 fn cdata_wrap(s: &str) -> String {
     let safe = s.replace("]]>", "]]]]><![CDATA[>");
     format!("<![CDATA[{}]]>", safe)
