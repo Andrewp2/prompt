@@ -69,7 +69,7 @@ pub fn show_file_tree(ui: &mut egui::Ui, tree: &FileTree, files: &mut [FileItem]
             let (total, selected) = get_folder_selection_counts(subtree, files);
             let mut folder_selected = selected == total;
             let indeterminate = selected > 0 && selected < total;
-            let mut cb = egui::Checkbox::new(&mut folder_selected, "").indeterminate(indeterminate);
+            let cb = egui::Checkbox::new(&mut folder_selected, "").indeterminate(indeterminate);
             if ui.add(cb).changed() {
                 set_folder_selection(subtree, files, folder_selected);
             }

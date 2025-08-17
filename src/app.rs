@@ -2,18 +2,16 @@ use crate::{
     command_runner::{run_command, Terminal},
     file_item::{FileItem, MAX_FILES},
     file_tree::{build_file_tree, generate_file_tree_string, show_file_tree, sort_file_tree},
-    prompt_builder::{compute_prompt, extract_text},
+    prompt_builder::extract_text,
     remote::{Remote, RemoteUpdate, RemoteUrl},
 };
-use clipboard::{ClipboardContext, ClipboardProvider};
+use clipboard::ClipboardProvider;
 use core::f32;
 use eframe::egui;
 use globset::GlobSet;
-use num_format::{Locale, ToFormattedString};
 use shell_words;
 use std::{
-    collections::HashMap,
-    env, fs,
+    env,
     path::PathBuf,
     time::{Duration, Instant},
 };

@@ -1,11 +1,10 @@
 // src/token_count.rs
 
-use once_cell::sync::Lazy;
 
 #[cfg(feature = "tokenizer-tiktoken")]
 mod imp {
-    use super::*;
-    use tiktoken_rs::{cl100k_base, o200k_base, CoreBPE};
+    
+    
 
     // static BPE: Lazy<CoreBPE> = Lazy::new(|| {
     //     // 🤖 Prefer o200k_base for newest OpenAI models; fall back to cl100k_base if needed
