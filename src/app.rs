@@ -13,6 +13,7 @@ use shell_words;
 use std::{
     env,
     path::PathBuf,
+    process::Command as SysCommand,
     time::{Duration, Instant},
 };
 
@@ -48,11 +49,21 @@ const DEFAULT_SYSTEM_PROMPT_ABS: &str =
     "/home/andrew-peterson/code/prompt/config/system_prompt.txt";
 
 fn find_system_prompt_path(
-    _current_folder: Option<&std::path::Path>,
+    current_folder: Option<&std::path::Path>,
 ) -> Result<std::path::PathBuf, String> {
     use std::path::PathBuf;
 
     let mut tried: Vec<PathBuf> = Vec::new();
+
+    // 0) Per-project override: <project>/.prompt/system_prompt.txt
+    if let Some(base) = current_folder {
+        let proj = base.join(".prompt").join("system_prompt.txt");
+        if proj.is_file() {
+            eprintln!("[prompt] using project system prompt: {}", proj.display());
+            return Ok(proj);
+        }
+        tried.push(proj);
+    }
 
     // 1) Optional env override
     if let Ok(from_env) = std::env::var("PROMPT_SYSTEM_PROMPT") {
@@ -129,6 +140,52 @@ fn read_text_capped(path: &std::path::Path, max_bytes: usize) -> Option<String> 
 }
 
 impl MyApp {
+    // removed: top-right panel in favor of placing buttons in Remote URL row
+    fn project_config_dir(base: &std::path::Path) -> std::path::PathBuf {
+        base.join(".prompt")
+    }
+
+    fn history_file_path(base: &std::path::Path) -> std::path::PathBuf {
+        Self::project_config_dir(base).join("terminal_history.json")
+    }
+
+    fn load_history(&mut self) {
+        let Some(ref base) = self.current_folder else {
+            return;
+        };
+        let path = Self::history_file_path(base);
+        if let Ok(data) = std::fs::read_to_string(&path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
+                if let Some(arr) = v.get("commands").and_then(|v| v.as_array()) {
+                    self.terminal.history = arr
+                        .iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect();
+                }
+                if let Some(max) = v.get("max").and_then(|v| v.as_u64()) {
+                    self.terminal.max_history = max as usize;
+                }
+            }
+        }
+    }
+
+    fn save_history(&self) -> std::io::Result<()> {
+        let Some(ref base) = self.current_folder else {
+            return Ok(());
+        };
+        let dir = Self::project_config_dir(base);
+        std::fs::create_dir_all(&dir)?;
+        let path = Self::history_file_path(base);
+        let json = serde_json::json!({
+            "commands": self.terminal.history,
+            "max": self.terminal.max_history,
+        });
+        std::fs::write(path, serde_json::to_string_pretty(&json).unwrap())
+    }
+
+    fn save_history_silent(&self) {
+        let _ = self.save_history();
+    }
     fn add_to_history(&mut self, cmd: &str) {
         let cmd = cmd.trim();
         if cmd.is_empty() {
@@ -141,6 +198,7 @@ impl MyApp {
         if self.terminal.history.len() > self.terminal.max_history {
             self.terminal.history.pop();
         }
+        self.save_history_silent();
     }
 
     fn run_terminal_command(&mut self, command: String) {
@@ -215,6 +273,114 @@ impl MyApp {
             let _ = tx.send(output);
         });
     }
+
+    fn open_prompt_folder(&mut self) {
+        let base: std::path::PathBuf = match self.current_folder.as_deref() {
+            Some(p) => p.to_path_buf(),
+            None => match std::env::current_dir() {
+                Ok(p) => p,
+                Err(_) => return,
+            },
+        };
+        let dir = Self::project_config_dir(&base);
+        let _ = std::fs::create_dir_all(&dir);
+
+        #[cfg(target_os = "macos")]
+        let mut cmd = SysCommand::new("open");
+        #[cfg(target_os = "linux")]
+        let mut cmd = SysCommand::new("xdg-open");
+        #[cfg(target_os = "windows")]
+        let mut cmd = SysCommand::new("explorer");
+
+        let _ = cmd.arg(&dir).spawn();
+        self.notification = Some((format!("Opened {}", dir.display()), Instant::now()));
+    }
+
+    fn create_addon_template(&mut self) {
+        let Some(base) = self.current_folder.as_deref() else {
+            return;
+        };
+        let dir = Self::project_config_dir(base);
+        let path = dir.join("system_prompt_addon.txt");
+        let _ = std::fs::create_dir_all(&dir);
+        if path.exists() {
+            self.notification = Some((
+                format!("Addon already exists at {}", path.display()),
+                Instant::now(),
+            ));
+            return;
+        }
+        let template = r"# Project System Prompt Addon
+
+Use this file to add project-specific guidance. It is appended after the base system prompt.
+
+- Context: Briefly explain the project domain and any unusual conventions.
+- Commands: Typical run/test commands or env you want the assistant to be aware of.
+- Constraints: Any do/don't rules unique to this repo.
+- Terminology: Domain terms, file extensions, or technologies to use correctly.
+
+Example notes:
+- Prefer `cargo run --bin <name>` for executables here.
+- Keep shader filenames and extensions consistent (e.g., .slang, .glsl, .wgsl as appropriate).
+- Large files should be summarized; avoid inlining binaries.
+";
+        match std::fs::write(&path, template) {
+            Ok(_) => {
+                self.notification = Some((format!("Created {}", path.display()), Instant::now()));
+            }
+            Err(e) => {
+                self.notification =
+                    Some((format!("Failed to create addon: {}", e), Instant::now()));
+            }
+        }
+    }
+
+    fn create_promptignore(&mut self) {
+        let Some(base) = self.current_folder.as_deref() else {
+            return;
+        };
+        let dir = base.join(".prompt");
+        let path = dir.join(".promptignore");
+        let _ = std::fs::create_dir_all(&dir);
+        if path.exists() {
+            self.notification = Some((
+                format!(".promptignore already exists at {}", path.display()),
+                Instant::now(),
+            ));
+            return;
+        }
+        let template = r"# .promptignore
+# Lines starting with '#' are comments.
+# Globs match paths relative to the project root.
+
+# Common large or generated directories
+target/**
+.git/**
+node_modules/**
+out/**
+*.lock
+*.DS_Store
+
+# Temporary files
+*.tmp
+
+# Add your own patterns below
+";
+        match std::fs::write(&path, template) {
+            Ok(_) => {
+                // Reload ignore set and file list to reflect new rules
+                self.ignore_set = crate::file_item::load_ignore_set_from(base);
+                self.refresh_files();
+                self.notification = Some((format!("Created {}", path.display()), Instant::now()));
+            }
+            Err(e) => {
+                self.notification = Some((
+                    format!("Failed to create .promptignore: {}", e),
+                    Instant::now(),
+                ));
+            }
+        }
+    }
     pub fn refresh_files(&mut self) {
         if let Some(ref folder) = self.current_folder {
             let previous_selection: std::collections::HashMap<_, _> = self
@@ -282,6 +448,35 @@ impl MyApp {
                     });
                     self.remote.new_url.clear();
                 }
+                // Right-aligned project controls on the same row
+                let avail = ui.available_width();
+                ui.allocate_ui_with_layout(
+                    egui::Vec2::new(avail, 0.0),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        if ui
+                            .button("Create .promptignore file")
+                            .on_hover_text("Create default .promptignore in .prompt")
+                            .clicked()
+                        {
+                            self.create_promptignore();
+                        }
+                        if ui
+                            .button("Create System Prompt Addon file")
+                            .on_hover_text("Create system_prompt_addon.txt")
+                            .clicked()
+                        {
+                            self.create_addon_template();
+                        }
+                        if ui
+                            .button("Open .prompt Folder")
+                            .on_hover_text("Open project .prompt folder")
+                            .clicked()
+                        {
+                            self.open_prompt_folder();
+                        }
+                    },
+                );
             });
             for i in (0..self.remote.remote_urls.len()).rev() {
                 ui.horizontal(|ui| {
@@ -324,6 +519,7 @@ impl MyApp {
                         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                             self.current_folder = Some(folder.clone());
                             self.refresh_files();
+                            self.load_history();
                         }
                     }
                     if ui.button("Refresh").clicked() {
@@ -550,6 +746,7 @@ impl MyApp {
                 ui.horizontal(|ui| {
                     if ui.button("Clear All").clicked() {
                         self.terminal.history.clear();
+                        self.save_history_silent();
                     }
                 });
 
@@ -570,6 +767,7 @@ impl MyApp {
                                     self.terminal.terminal_command = cmd_str.clone();
                                     self.add_to_history(&cmd_str);
                                     self.run_terminal_command(cmd_str.clone());
+                                    self.save_history_silent();
                                 }
                                 if ui.link(&cmd_str).clicked() {
                                     self.terminal.terminal_command = cmd_str.clone();
@@ -584,6 +782,7 @@ impl MyApp {
                                 .position(|c| *c == cmd_to_remove)
                             {
                                 self.terminal.history.remove(pos);
+                                self.save_history_silent();
                             }
                         }
                     });
@@ -616,8 +815,8 @@ fn compute_and_copy_prompt(app: &mut MyApp, ctx: &egui::Context) {
     // Refresh file list (paths, sizes, selections)
     app.refresh_files();
 
-    // ---- load system prompt ----
-    let system_prompt: String = match find_system_prompt_path(app.current_folder.as_deref()) {
+    // ---- load system prompt (with optional per-project addon) ----
+    let mut system_prompt: String = match find_system_prompt_path(app.current_folder.as_deref()) {
         Ok(p) => match std::fs::read_to_string(&p) {
             Ok(s) => s,
             Err(e) => {
@@ -636,6 +835,20 @@ fn compute_and_copy_prompt(app: &mut MyApp, ctx: &egui::Context) {
             )
         }
     };
+    if let Some(base) = app.current_folder.as_deref() {
+        let addon = base.join(".prompt").join("system_prompt_addon.txt");
+        if addon.is_file() {
+            match std::fs::read_to_string(&addon) {
+                Ok(extra) => {
+                    system_prompt.push_str("\n\n");
+                    system_prompt.push_str(&extra);
+                }
+                Err(err) => {
+                    eprintln!("[prompt] WARN: failed reading addon {:?}: {}", addon, err);
+                }
+            }
+        }
+    }
 
     // ---- read selected files in PARALLEL, sorted for determinism ----
     let mut sel_indices: Vec<usize> = app
@@ -753,6 +966,7 @@ impl Default for MyApp {
         };
 
         app.refresh_files();
+        app.load_history();
 
         app
     }
@@ -769,7 +983,6 @@ impl eframe::App for MyApp {
         while let Ok(output) = self.terminal.terminal_update_rx.try_recv() {
             self.terminal.terminal_output = output;
         }
-
         self.remote_url_panel(ctx);
 
         self.file_panel(ctx);
@@ -787,6 +1000,7 @@ pub fn run() {
         if folder.is_dir() {
             app.current_folder = Some(folder);
             app.refresh_files();
+            app.load_history();
         } else {
             eprintln!("Warning: Provided argument is not a valid directory.");
         }

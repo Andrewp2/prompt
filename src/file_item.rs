@@ -16,11 +16,20 @@ pub struct FileItem {
 pub fn find_ignore_file(start: &Path) -> Option<PathBuf> {
     let mut current = start;
     loop {
-        let candidate = current.join(".promptignore");
-        if candidate.exists() {
-            eprintln!("Found .promptignore at {:?}", candidate);
-            return Some(candidate);
+        // Prefer new location: .prompt/.promptignore
+        let candidate_new = current.join(".prompt").join(".promptignore");
+        if candidate_new.exists() {
+            eprintln!("Found .prompt/.promptignore at {:?}", candidate_new);
+            return Some(candidate_new);
         }
+
+        // Fallback legacy location: ./.promptignore
+        let candidate_legacy = current.join(".promptignore");
+        if candidate_legacy.exists() {
+            eprintln!("Found legacy .promptignore at {:?}", candidate_legacy);
+            return Some(candidate_legacy);
+        }
+
         match current.parent() {
             Some(parent) => current = parent,
             None => break,
@@ -30,7 +39,8 @@ pub fn find_ignore_file(start: &Path) -> Option<PathBuf> {
 }
 
 pub fn load_ignore_set_from(base: &Path) -> GlobSet {
-    let ignore_path = find_ignore_file(base).unwrap_or_else(|| base.join(".promptignore"));
+    let ignore_path =
+        find_ignore_file(base).unwrap_or_else(|| base.join(".prompt").join(".promptignore"));
     eprintln!("Loading ignore patterns from {:?}", ignore_path);
     let mut builder = GlobSetBuilder::new();
     if let Ok(contents) = fs::read_to_string(ignore_path) {

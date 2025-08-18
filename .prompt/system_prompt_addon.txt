@@ -1,0 +1,13 @@
+# Project System Prompt Addon
+
+Use this file to add project-specific guidance. It is appended after the base system prompt.
+
+- Context: Briefly explain the project domain and any unusual conventions.
+- Commands: Typical run/test commands or env you want the assistant to be aware of.
+- Constraints: Any do/don't rules unique to this repo.
+- Terminology: Domain terms, file extensions, or technologies to use correctly.
+
+Example notes:
+- Prefer `cargo run --bin <name>` for executables here.
+- Keep shader filenames and extensions consistent (e.g., .slang, .glsl, .wgsl as appropriate).
+- Large files should be summarized; avoid inlining binaries.
