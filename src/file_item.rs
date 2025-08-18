@@ -49,13 +49,36 @@ pub fn load_ignore_set_from(base: &Path) -> GlobSet {
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            let pattern = if !trimmed.contains('/') {
-                format!("**/{}**", trimmed)
+
+            let mut patterns: Vec<String> = Vec::new();
+
+            if trimmed.ends_with('/') {
+                // Directory pattern: ignore the dir itself and all its contents at any depth
+                let d = trimmed.trim_end_matches('/');
+                if !d.is_empty() {
+                    patterns.push(format!("**/{}", d));
+                    patterns.push(format!("**/{}/**", d));
+                }
+            } else if trimmed.contains('/') {
+                // Path pattern (may include globs): match at any depth
+                patterns.push(format!("**/{}", trimmed));
             } else {
-                trimmed.to_string()
-            };
-            if let Ok(glob) = Glob::new(&pattern) {
-                builder.add(glob);
+                // Basename pattern
+                let has_glob = trimmed.chars().any(|c| matches!(c, '*' | '?' | '['));
+                if has_glob {
+                    // e.g., *.tmp -> **/*.tmp
+                    patterns.push(format!("**/{}", trimmed));
+                } else {
+                    // Name without globs: ignore file or directory with this name anywhere
+                    patterns.push(format!("**/{}", trimmed));
+                    patterns.push(format!("**/{}/**", trimmed));
+                }
+            }
+
+            for pat in patterns {
+                if let Ok(glob) = Glob::new(&pat) {
+                    builder.add(glob);
+                }
             }
         }
     } else {
