@@ -13,6 +13,8 @@ pub struct Terminal {
     pub terminal_output: String,
     pub terminal_update_rx: mpsc::Receiver<String>,
     pub terminal_update_tx: mpsc::Sender<String>,
+    pub history: Vec<String>,
+    pub max_history: usize,
 }
 
 impl Default for Terminal {
@@ -26,6 +28,8 @@ impl Default for Terminal {
             terminal_output: String::new(),
             terminal_update_rx: term_rx,
             terminal_update_tx: term_tx,
+            history: Vec::new(),
+            max_history: 50,
         }
     }
 }

@@ -129,6 +129,92 @@ fn read_text_capped(path: &std::path::Path, max_bytes: usize) -> Option<String> 
 }
 
 impl MyApp {
+    fn add_to_history(&mut self, cmd: &str) {
+        let cmd = cmd.trim();
+        if cmd.is_empty() {
+            return;
+        }
+        if let Some(pos) = self.terminal.history.iter().position(|c| c == cmd) {
+            self.terminal.history.remove(pos);
+        }
+        self.terminal.history.insert(0, cmd.to_string());
+        if self.terminal.history.len() > self.terminal.max_history {
+            self.terminal.history.pop();
+        }
+    }
+
+    fn run_terminal_command(&mut self, command: String) {
+        let tokens: Vec<String> = match shell_words::split(&command) {
+            Ok(t) => t,
+            Err(err) => {
+                self.terminal.terminal_output = format!("Error parsing command: {}", err);
+                return;
+            }
+        };
+        if tokens.is_empty() {
+            return;
+        }
+
+        // Parse leading KEY=VAL assignments as env vars for the child.
+        let mut idx = 0usize;
+        let mut env_overrides: Vec<(String, String)> = Vec::new();
+        while idx < tokens.len() {
+            let t = &tokens[idx];
+            let looks_like_env = !t.starts_with('-') && !t.starts_with("--") && t.contains('=');
+            if !looks_like_env {
+                break;
+            }
+            if let Some(eq) = t.find('=') {
+                let key = &t[..eq];
+                let val = &t[eq + 1..];
+                let mut ch = key.chars();
+                let valid_key = match ch.next() {
+                    Some(c) if c == '_' || c.is_ascii_alphabetic() => {
+                        ch.all(|c| c == '_' || c.is_ascii_alphanumeric())
+                    }
+                    _ => false,
+                };
+                if valid_key {
+                    env_overrides.push((key.to_string(), val.to_string()));
+                    idx += 1;
+                    continue;
+                }
+            }
+            break;
+        }
+        if idx >= tokens.len() {
+            self.terminal.terminal_output =
+                "Expected a command after environment assignments.".to_string();
+            return;
+        }
+
+        let cmd = tokens[idx].clone();
+        let args: Vec<String> = tokens[idx + 1..].to_vec();
+        let head = self.terminal.head_lines;
+        let tail = self.terminal.tail_lines;
+        let timeout = self.terminal.timeout_secs;
+        let tx = self.terminal.terminal_update_tx.clone();
+        let working_dir = self
+            .current_folder
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap());
+
+        std::thread::spawn(move || {
+            let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
+            let do_timeout = timeout > 0;
+            let output = run_command(
+                &working_dir,
+                &cmd,
+                &args_ref,
+                head,
+                tail,
+                do_timeout,
+                Duration::from_secs(timeout),
+                &env_overrides,
+            );
+            let _ = tx.send(output);
+        });
+    }
     pub fn refresh_files(&mut self) {
         if let Some(ref folder) = self.current_folder {
             let previous_selection: std::collections::HashMap<_, _> = self
@@ -450,93 +536,57 @@ impl MyApp {
                     ui.add(egui::DragValue::new(&mut self.terminal.tail_lines));
                     ui.label("Timeout (sec, 0 = no timeout):");
                     ui.add(egui::DragValue::new(&mut self.terminal.timeout_secs));
-                });
-                // ... a couple lines above
-                if ui.button("Run Command").clicked() {
-                    let command = self.terminal.terminal_command.clone();
-                    let tokens: Vec<String> = match shell_words::split(&command) {
-                        Ok(t) => t,
-                        Err(err) => {
-                            self.terminal.terminal_output =
-                                format!("Error parsing command: {}", err);
-                            return;
-                        }
-                    };
-                    if tokens.is_empty() {
-                        return;
+
+                    ui.separator();
+                    if ui.button("Run Command").clicked() {
+                        let command = self.terminal.terminal_command.clone();
+                        self.add_to_history(&command);
+                        self.run_terminal_command(command);
                     }
+                });
+                // History UI
+                ui.separator();
+                // Controls above the history header
+                ui.horizontal(|ui| {
+                    if ui.button("Clear All").clicked() {
+                        self.terminal.history.clear();
+                    }
+                });
 
-                    // 🤖 Parse leading KEY=VAL assignments a la POSIX shells and pass as env vars.
-                    let mut idx = 0usize;
-                    let mut env_overrides: Vec<(String, String)> = Vec::new();
-
-                    // 🤖 Treat only the *leading* tokens of the form KEY=VAL as env; stop at first non-assignment.
-                    while idx < tokens.len() {
-                        let t = &tokens[idx];
-                        let looks_like_env =
-                            !t.starts_with('-') && !t.starts_with("--") && t.contains('=');
-                        if !looks_like_env {
-                            break;
-                        }
-
-                        if let Some(eq) = t.find('=') {
-                            let key = &t[..eq];
-                            let val = &t[eq + 1..];
-
-                            // 🤖 Simple validation to avoid swallowing things like `--cfg=foo`
-                            let valid_key = {
-                                let mut chars = key.chars();
-                                match chars.next() {
-                                    Some(c) if c == '_' || c.is_ascii_alphabetic() => {
-                                        chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
-                                    }
-                                    _ => false,
+                ui.label("Command History");
+                egui::ScrollArea::vertical()
+                    .max_height(140.0)
+                    .show(ui, |ui| {
+                        // Work on a snapshot to avoid borrow conflicts during UI callbacks
+                        let snapshot: Vec<String> = self.terminal.history.clone();
+                        let mut remove_cmd: Option<String> = None;
+                        for cmd in snapshot.iter() {
+                            let cmd_str = cmd.clone();
+                            ui.horizontal(|ui| {
+                                if ui.small_button("X").on_hover_text("Forget").clicked() {
+                                    remove_cmd = Some(cmd_str.clone());
                                 }
-                            };
-
-                            if valid_key {
-                                env_overrides.push((key.to_string(), val.to_string()));
-                                idx += 1;
-                                continue;
+                                if ui.small_button("Run").clicked() {
+                                    self.terminal.terminal_command = cmd_str.clone();
+                                    self.add_to_history(&cmd_str);
+                                    self.run_terminal_command(cmd_str.clone());
+                                }
+                                if ui.link(&cmd_str).clicked() {
+                                    self.terminal.terminal_command = cmd_str.clone();
+                                }
+                            });
+                        }
+                        if let Some(cmd_to_remove) = remove_cmd {
+                            if let Some(pos) = self
+                                .terminal
+                                .history
+                                .iter()
+                                .position(|c| *c == cmd_to_remove)
+                            {
+                                self.terminal.history.remove(pos);
                             }
                         }
-                        break;
-                    }
-
-                    if idx >= tokens.len() {
-                        self.terminal.terminal_output =
-                            "Expected a command after environment assignments.".to_string(); // 🤖 helpful message
-                        return;
-                    }
-
-                    let cmd = tokens[idx].clone();
-                    let args: Vec<String> = tokens[idx + 1..].to_vec();
-                    let head = self.terminal.head_lines;
-                    let tail = self.terminal.tail_lines;
-                    let timeout = self.terminal.timeout_secs;
-                    let tx = self.terminal.terminal_update_tx.clone();
-                    let working_dir = self
-                        .current_folder
-                        .clone()
-                        .unwrap_or_else(|| std::env::current_dir().unwrap());
-
-                    std::thread::spawn(move || {
-                        let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-                        let do_timeout = timeout > 0;
-                        let output = run_command(
-                            &working_dir,
-                            &cmd,
-                            &args_ref,
-                            head,
-                            tail,
-                            do_timeout,
-                            Duration::from_secs(timeout),
-                            &env_overrides, // 🤖 pass env vars to the child
-                        );
-                        let _ = tx.send(output);
                     });
-                }
-                // ... a couple lines below
 
                 ui.separator();
                 ui.label("Terminal Output:");
