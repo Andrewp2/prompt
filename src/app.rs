@@ -354,10 +354,10 @@ Example notes:
 # Globs match paths relative to the project root.
 
 # Common large or generated directories
-target/**
-.git/**
-node_modules/**
-out/**
+**/target/**
+**/.git/**
+**/node_modules/**
+**/out/**
 *.lock
 *.DS_Store
 

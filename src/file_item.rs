@@ -85,7 +85,19 @@ pub fn get_all_files_limited(base: &Path, limit: usize, ignore_set: &GlobSet) ->
                     Err(_) => continue,
                 };
                 let rel_path_str = rel_path.to_string_lossy();
-                if path.is_file() {
+
+                // Use DirEntry::file_type to avoid following symlinks
+                let ft = match entry.file_type() {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+
+                // Skip symlinks entirely to avoid cycles/explosions
+                if ft.is_symlink() {
+                    continue;
+                }
+
+                if ft.is_file() {
                     if ignore_set.is_match(rel_path_str.as_ref()) {
                         continue;
                     }
@@ -93,7 +105,7 @@ pub fn get_all_files_limited(base: &Path, limit: usize, ignore_set: &GlobSet) ->
                     if files.len() >= limit {
                         break;
                     }
-                } else if path.is_dir() {
+                } else if ft.is_dir() {
                     if ignore_set.is_match(rel_path_str.as_ref()) {
                         continue;
                     }
