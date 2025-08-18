@@ -1,5 +1,6 @@
 {
   "commands": [
+    "cargo build",
     "ls"
   ],
   "max": 50

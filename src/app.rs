@@ -749,10 +749,22 @@ Example notes:
                     ui.add(egui::DragValue::new(&mut self.terminal.timeout_secs));
 
                     ui.separator();
-                    if ui.button("Run Command").clicked() {
+                    let run_clicked = ui
+                        .add_enabled(!self.terminal.is_running, egui::Button::new("Run Command"))
+                        .clicked();
+                    if run_clicked {
                         let command = self.terminal.terminal_command.clone();
                         self.add_to_history(&command);
+                        // Clear previous output and indicate running
+                        self.terminal.terminal_output.clear();
+                        self.terminal.is_running = true;
                         self.run_terminal_command(command);
+                    }
+
+                    if self.terminal.is_running {
+                        ui.separator();
+                        ui.add(egui::Spinner::new());
+                        ui.label("Running...");
                     }
                 });
                 // History UI
@@ -781,6 +793,9 @@ Example notes:
                                 if ui.small_button("Run").clicked() {
                                     self.terminal.terminal_command = cmd_str.clone();
                                     self.add_to_history(&cmd_str);
+                                    // Clear previous output and indicate running
+                                    self.terminal.terminal_output.clear();
+                                    self.terminal.is_running = true;
                                     self.run_terminal_command(cmd_str.clone());
                                     self.save_history_silent();
                                 }
@@ -998,6 +1013,7 @@ impl eframe::App for MyApp {
         }
         while let Ok(output) = self.terminal.terminal_update_rx.try_recv() {
             self.terminal.terminal_output = output;
+            self.terminal.is_running = false;
         }
         self.remote_url_panel(ctx);
 

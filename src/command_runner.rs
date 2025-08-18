@@ -15,6 +15,7 @@ pub struct Terminal {
     pub terminal_update_tx: mpsc::Sender<String>,
     pub history: Vec<String>,
     pub max_history: usize,
+    pub is_running: bool,
 }
 
 impl Default for Terminal {
@@ -30,6 +31,7 @@ impl Default for Terminal {
             terminal_update_tx: term_tx,
             history: Vec::new(),
             max_history: 50,
+            is_running: false,
         }
     }
 }
