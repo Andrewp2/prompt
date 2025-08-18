@@ -92,12 +92,19 @@ pub fn load_ignore_set_from(base: &Path) -> GlobSet {
     gs
 }
 
-pub fn get_all_files_limited(base: &Path, limit: usize, ignore_set: &GlobSet) -> Vec<PathBuf> {
+pub fn get_all_files_limited(
+    base: &Path,
+    limit: usize,
+    ignore_set: &GlobSet,
+) -> (Vec<PathBuf>, usize, usize) {
     let mut files = Vec::new();
+    let mut scanned_files: usize = 0;
+    let mut ignored_count: usize = 0;
     let mut dirs = vec![base.to_path_buf()];
     while let Some(current_dir) = dirs.pop() {
         let rel_dir = current_dir.strip_prefix(base).unwrap_or(&current_dir);
         if ignore_set.is_match(rel_dir.to_string_lossy().as_ref()) {
+            ignored_count += 1;
             continue;
         }
         if let Ok(entries) = fs::read_dir(&current_dir) {
@@ -117,11 +124,14 @@ pub fn get_all_files_limited(base: &Path, limit: usize, ignore_set: &GlobSet) ->
 
                 // Skip symlinks entirely to avoid cycles/explosions
                 if ft.is_symlink() {
+                    ignored_count += 1;
                     continue;
                 }
 
                 if ft.is_file() {
+                    scanned_files += 1;
                     if ignore_set.is_match(rel_path_str.as_ref()) {
+                        ignored_count += 1;
                         continue;
                     }
                     files.push(path);
@@ -130,6 +140,7 @@ pub fn get_all_files_limited(base: &Path, limit: usize, ignore_set: &GlobSet) ->
                     }
                 } else if ft.is_dir() {
                     if ignore_set.is_match(rel_path_str.as_ref()) {
+                        ignored_count += 1;
                         continue;
                     }
                     dirs.push(path);
@@ -151,5 +162,5 @@ pub fn get_all_files_limited(base: &Path, limit: usize, ignore_set: &GlobSet) ->
             .show();
     }
     files.truncate(limit);
-    files
+    (files, scanned_files, ignored_count)
 }

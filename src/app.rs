@@ -29,6 +29,8 @@ pub struct MyApp {
 
     pub remote: Remote,
     pub terminal: Terminal,
+    pub scanned_files: usize,
+    pub ignored_entries: usize,
 }
 
 fn cdata_wrap(s: &str) -> String {
@@ -390,8 +392,10 @@ Example notes:
                 .collect();
 
             self.ignore_set = crate::file_item::load_ignore_set_from(folder);
-            let file_paths =
+            let (file_paths, scanned, ignored) =
                 crate::file_item::get_all_files_limited(folder, MAX_FILES, &self.ignore_set);
+            self.scanned_files = scanned;
+            self.ignored_entries = ignored;
 
             self.files.clear();
             for path in file_paths {
@@ -531,6 +535,15 @@ Example notes:
                         }
                     }
                 });
+                ui.small(
+                    egui::RichText::new(format!(
+                        "Scanned: {}, Ignored: {}, Loaded: {}",
+                        self.scanned_files,
+                        self.ignored_entries,
+                        self.files.len()
+                    ))
+                    .monospace(),
+                );
                 ui.separator();
                 let available_height = ui.available_height();
                 let scroll_height = (available_height - BOTTOM_MARGIN).max(0.0);
@@ -958,16 +971,15 @@ impl Default for MyApp {
             ignore_set,
             generated_prompt: String::new(),
             token_count: 0,
-            current_folder: Some(cwd.clone()),
+            current_folder: None,
             include_file_tree: true,
             notification: None,
             remote: Remote::default(),
             terminal: Terminal::default(),
+            scanned_files: 0,
+            ignored_entries: 0,
         };
-
-        app.refresh_files();
-        app.load_history();
-
+        // Defer scanning until run() sets the folder
         app
     }
 }
@@ -995,16 +1007,22 @@ impl eframe::App for MyApp {
 
 pub fn run() {
     let mut app = MyApp::default();
-    if let Some(arg) = env::args().nth(1) {
-        let folder = PathBuf::from(arg);
-        if folder.is_dir() {
-            app.current_folder = Some(folder);
-            app.refresh_files();
-            app.load_history();
-        } else {
-            eprintln!("Warning: Provided argument is not a valid directory.");
+    match env::args().nth(1) {
+        Some(arg) => {
+            let folder = PathBuf::from(arg);
+            if folder.is_dir() {
+                app.current_folder = Some(folder);
+            } else {
+                eprintln!("Warning: Provided argument is not a valid directory.");
+                app.current_folder = Some(env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            }
+        }
+        None => {
+            app.current_folder = Some(env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         }
     }
+    app.refresh_files();
+    app.load_history();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1920.0, 1080.0])
