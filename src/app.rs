@@ -30,7 +30,9 @@ pub struct MyApp {
     pub remote: Remote,
     pub terminal: Terminal,
     pub scanned_files: usize,
-    pub ignored_entries: usize,
+    pub ignored_files: usize,
+    pub ignored_dirs: usize,
+    pub symlinks_skipped: usize,
 }
 
 fn cdata_wrap(s: &str) -> String {
@@ -392,10 +394,12 @@ Example notes:
                 .collect();
 
             self.ignore_set = crate::file_item::load_ignore_set_from(folder);
-            let (file_paths, scanned, ignored) =
+            let (file_paths, scanned, ignored_files, ignored_dirs, syms) =
                 crate::file_item::get_all_files_limited(folder, MAX_FILES, &self.ignore_set);
             self.scanned_files = scanned;
-            self.ignored_entries = ignored;
+            self.ignored_files = ignored_files;
+            self.ignored_dirs = ignored_dirs;
+            self.symlinks_skipped = syms;
 
             self.files.clear();
             for path in file_paths {
@@ -537,10 +541,8 @@ Example notes:
                 });
                 ui.small(
                     egui::RichText::new(format!(
-                        "Scanned: {}, Ignored: {}, Loaded: {}",
-                        self.scanned_files,
-                        self.ignored_entries,
-                        self.files.len()
+                        "Scanned: {}  |  Ignored dirs: {}  |  Ignored: {}  |  Symlinks: {}  |  Loaded: {}",
+                        self.scanned_files, self.ignored_dirs, self.ignored_files, self.symlinks_skipped, self.files.len()
                     ))
                     .monospace(),
                 );
@@ -977,7 +979,9 @@ impl Default for MyApp {
             remote: Remote::default(),
             terminal: Terminal::default(),
             scanned_files: 0,
-            ignored_entries: 0,
+            ignored_files: 0,
+            ignored_dirs: 0,
+            symlinks_skipped: 0,
         };
         // Defer scanning until run() sets the folder
         app
@@ -1014,7 +1018,8 @@ pub fn run() {
                 app.current_folder = Some(folder);
             } else {
                 eprintln!("Warning: Provided argument is not a valid directory.");
-                app.current_folder = Some(env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                app.current_folder =
+                    Some(env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
             }
         }
         None => {

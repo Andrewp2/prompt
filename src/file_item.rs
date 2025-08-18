@@ -96,15 +96,17 @@ pub fn get_all_files_limited(
     base: &Path,
     limit: usize,
     ignore_set: &GlobSet,
-) -> (Vec<PathBuf>, usize, usize) {
+) -> (Vec<PathBuf>, usize, usize, usize, usize) {
     let mut files = Vec::new();
-    let mut scanned_files: usize = 0;
-    let mut ignored_count: usize = 0;
+    let mut scanned_files: usize = 0; // file entries visited (not counting pruned subtrees)
+    let mut ignored_files: usize = 0; // files ignored by patterns
+    let mut ignored_dirs: usize = 0; // directories ignored (each counts recursively skipped subtree)
+    let mut symlinks_skipped: usize = 0; // symlink files/dirs skipped
     let mut dirs = vec![base.to_path_buf()];
     while let Some(current_dir) = dirs.pop() {
         let rel_dir = current_dir.strip_prefix(base).unwrap_or(&current_dir);
         if ignore_set.is_match(rel_dir.to_string_lossy().as_ref()) {
-            ignored_count += 1;
+            ignored_dirs += 1; // this whole subtree is pruned
             continue;
         }
         if let Ok(entries) = fs::read_dir(&current_dir) {
@@ -124,14 +126,14 @@ pub fn get_all_files_limited(
 
                 // Skip symlinks entirely to avoid cycles/explosions
                 if ft.is_symlink() {
-                    ignored_count += 1;
+                    symlinks_skipped += 1;
                     continue;
                 }
 
                 if ft.is_file() {
                     scanned_files += 1;
                     if ignore_set.is_match(rel_path_str.as_ref()) {
-                        ignored_count += 1;
+                        ignored_files += 1;
                         continue;
                     }
                     files.push(path);
@@ -140,7 +142,7 @@ pub fn get_all_files_limited(
                     }
                 } else if ft.is_dir() {
                     if ignore_set.is_match(rel_path_str.as_ref()) {
-                        ignored_count += 1;
+                        ignored_dirs += 1; // prune this subtree
                         continue;
                     }
                     dirs.push(path);
@@ -162,5 +164,5 @@ pub fn get_all_files_limited(
             .show();
     }
     files.truncate(limit);
-    (files, scanned_files, ignored_count)
+    (files, scanned_files, ignored_files, ignored_dirs, symlinks_skipped)
 }
