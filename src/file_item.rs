@@ -106,7 +106,9 @@ pub fn get_all_files_limited(
     while let Some(current_dir) = dirs.pop() {
         let rel_dir = current_dir.strip_prefix(base).unwrap_or(&current_dir);
         if ignore_set.is_match(rel_dir.to_string_lossy().as_ref()) {
-            ignored_dirs += 1; // this whole subtree is pruned
+            // this whole subtree is pruned; count files inside so Ignored reflects them
+            ignored_dirs += 1;
+            ignored_files += count_files_under(&current_dir);
             continue;
         }
         if let Ok(entries) = fs::read_dir(&current_dir) {
@@ -142,7 +144,9 @@ pub fn get_all_files_limited(
                     }
                 } else if ft.is_dir() {
                     if ignore_set.is_match(rel_path_str.as_ref()) {
-                        ignored_dirs += 1; // prune this subtree
+                        // prune this subtree and count files within it
+                        ignored_dirs += 1;
+                        ignored_files += count_files_under(&path);
                         continue;
                     }
                     dirs.push(path);
@@ -165,4 +169,26 @@ pub fn get_all_files_limited(
     }
     files.truncate(limit);
     (files, scanned_files, ignored_files, ignored_dirs, symlinks_skipped)
+}
+
+fn count_files_under(dir: &Path) -> usize {
+    let mut count = 0usize;
+    let mut stack: Vec<PathBuf> = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        if let Ok(entries) = fs::read_dir(&d) {
+            for entry in entries.flatten() {
+                let Ok(ft) = entry.file_type() else { continue };
+                if ft.is_symlink() {
+                    continue;
+                }
+                let p = entry.path();
+                if ft.is_file() {
+                    count += 1;
+                } else if ft.is_dir() {
+                    stack.push(p);
+                }
+            }
+        }
+    }
+    count
 }
