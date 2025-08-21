@@ -1,34 +1,43 @@
 {
   "name": "prompt-generator-launcher",
   "displayName": "Prompt Generator Launcher",
-  "description": "Launches Prompt Generator from a folder context menu in VSCode.",
-  "version": "0.1.0",
-  "publisher": "Andrew Peterson",
+  "description": "Launch Prompt Generator from a folder context menu, Explorer header button, and status bar.",
+  "version": "0.1.4",
+  "publisher": "apeterson",
   "engines": {
     "vscode": "^1.97.0"
   },
+  "extensionKind": [
+    "ui"
+  ],
   "categories": [
     "Other"
   ],
   "activationEvents": [
-    "onCommand:promptGenerator.open"
+    "onStartupFinished",
+    "onCommand:promptGenerator.open",
+    "onCommand:promptGenerator.openHere"
   ],
   "main": "./out/extension.js",
   "contributes": {
-    "configuration": {
-      "title": "Prompt Generator",
-      "properties": {
-        "promptGenerator.binaryPath": {
-          "type": "string",
-          "default": "",
-          "description": "Absolute path to the Prompt binary. Leave blank to use 'prompt' from PATH."
-        }
-      }
-    },
     "commands": [
       {
         "command": "promptGenerator.open",
-        "title": "Open in Prompt Generator"
+        "title": "Open in Prompt Generator",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "promptGenerator.openHere",
+        "title": "Open Prompt Generator (Workspace)",
+        "icon": "$(rocket)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "promptGenerator.openHere",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p",
+        "when": "workbenchState != 'empty'"
       }
     ],
     "menus": {
@@ -38,9 +47,21 @@
           "when": "explorerResourceIsFolder",
           "group": "navigation"
         }
+      ],
+      "explorer/title": [
+        {
+          "command": "promptGenerator.openHere",
+          "when": "explorerViewletVisible",
+          "group": "navigation@10"
+        }
       ]
     }
   },
+  "repository": {
+    "type": "git",
+    "url": "https://example.com/apeterson/prompt-generator-launcher.git"
+  },
+  "license": "MIT",
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./"
